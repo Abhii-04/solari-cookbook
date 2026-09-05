@@ -1,91 +1,106 @@
-# Solari Cookbook
+# ULTRON
 
-Short, runnable examples for [Solari](https://getsolari.com) — cloud browsers,
-sandboxes, and desktops behind one API key.
+ULTRON is a local CLI agent built with LangGraph. It routes user requests between a
+general assistant workflow and a repository setup workflow, with Solari sandbox
+support for isolated code execution.
 
-Every example in this repo is a complete program you can run in under a minute.
-They are deliberately small: one idea each, no framework, no scaffolding to read
-past. Copy one into your project and change the parts you care about.
+The agent can:
 
-## Examples
+- answer general reasoning, writing, editing, and planning requests
+- run local bash commands in this workspace when needed
+- create and use Solari sandboxes for isolated execution
+- safely set up GitHub repositories by cloning, scanning, installing, and smoke-running
+  them in a sandbox before installing locally
 
-### Cloud browser
+## Requirements
 
-| Example | Language | What it shows |
-| --- | --- | --- |
-| [browser-quickstart-ts](examples/browser-quickstart-ts) | TypeScript | Launch a browser, open a page, read it |
-| [browser-quickstart-py](examples/browser-quickstart-py) | Python | Launch a browser, open a page, read it |
-| [browser-stealth-proxy-ts](examples/browser-stealth-proxy-ts) | TypeScript | Stealth mode + residential proxy egress |
-| [browser-profiles-ts](examples/browser-profiles-ts) | TypeScript | Log in once, reuse the session forever |
-| [browser-session-recording-py](examples/browser-session-recording-py) | Python | Record a session, download the replay |
+- Python 3.11+
+- `uv`
+- a DeepSeek API key
+- a Solari API key if you want sandbox features
 
-### Sandbox
-
-| Example | Language | What it shows |
-| --- | --- | --- |
-| [sandbox-quickstart-ts](examples/sandbox-quickstart-ts) | TypeScript | Run a command, write and read files |
-| [sandbox-code-interpreter-py](examples/sandbox-code-interpreter-py) | Python | Stateful Python kernel for agent loops |
-| [sandbox-port-preview-ts](examples/sandbox-port-preview-ts) | TypeScript | Expose a server in the VM on a public URL |
-
-### Desktop
-
-| Example | Language | What it shows |
-| --- | --- | --- |
-| [desktop-computer-use-py](examples/desktop-computer-use-py) | Python | Screenshot, click, and type on a Linux GUI |
-
-## Running an example
-
-Each directory is self-contained.
+Create a local `.env` file:
 
 ```bash
-git clone https://github.com/solari-sdk/solari-cookbook.git
-cd solari-cookbook/examples/browser-quickstart-ts
-
-npm install                          # or: pip install -r requirements.txt
-export SOLARI_API_KEY=slr_live_...   # grab one at console.getsolari.com
-npm start                            # or: python main.py
+DEEPSEEK_API_KEY=your_deepseek_key
+SOLARI_API_KEY=your_solari_key
 ```
 
-One `slr_live_` key works across browsers, sandboxes, and desktops, and every
-product bills to the same balance.
+## Install
 
-## Which product do I want?
+```bash
+uv sync
+```
 
-- **Cloud browser** — you need a *web page*: scraping, testing, filling forms,
-  anything Playwright or Puppeteer would do locally. Adds stealth, managed
-  proxies, captcha solving, profiles, and session recording.
-- **Sandbox** — you need to *run code*: an LLM's Python, an untrusted build, a
-  data job. A headless microVM that boots from a snapshot in about a second.
-- **Desktop** — you need a *screen*: computer-use agents, GUI apps, anything
-  that has to be clicked. A sandbox plus X11 and a live VNC stream.
+## Start The Agent
 
-## Gotchas the examples encode
+```bash
+uv run python main.py
+```
 
-Things that cost you an afternoon if you meet them cold:
+You will see a prompt:
 
-- **TypeScript: call `await solari.close()`.** The browser client keeps a
-  loopback proxy open for connection retries. Skip the close and your script
-  prints its output and then hangs forever instead of exiting.
-- **Recording is per session, not per account.** Pass `recording: true` when you
-  create the session; without it the replay endpoint 404s forever. The upload is
-  async after release, so poll for ~30s before giving up.
-- **Sandbox commands are not shell-interpreted.** `run("ls -la")` looks for a
-  binary named `ls -la`. Put argv in `args`, or run `sh -c` explicitly.
-- **`kill()`, not `close()`, ends a VM.** `close()` drops your local control
-  channel; the VM keeps running until its idle timeout.
-- **`timeoutMs` is a rolling idle window**, not a hard deadline — it resets on
-  every use.
+```text
+You:
+```
 
-## Links
+Type a request and press Enter. Use `exit` or `quit` to stop the agent.
 
-- Docs — [docs.getsolari.com](https://docs.getsolari.com)
-- Console — [console.getsolari.com](https://console.getsolari.com)
-- Changelog — [changelog.getsolari.com](https://changelog.getsolari.com)
-- Questions — [hello@getsolari.com](mailto:hello@getsolari.com)
+## Repository Setup Flow
 
-## Contributing
+When you ask ULTRON to set up a GitHub repository, it uses the dedicated repo
+setup workflow:
 
-New examples are welcome. Keep them small, make them run end-to-end against the
-real API, and put anything surprising in a comment right where it bites.
+1. Creates a Solari sandbox.
+2. Clones the target repository into the sandbox.
+3. Runs a static security scan before installing or running code.
+4. Installs dependencies in the sandbox.
+5. Runs a smoke command discovered from README files, manifests, and entrypoints.
+6. Clones and installs locally only after the sandbox checks pass.
 
-MIT licensed.
+At the end of a successful setup, ULTRON prints the local path, detected start
+command, project open command, and sandbox console URL when available.
+
+Example:
+
+```text
+set up https://github.com/owner/repo.git
+```
+
+## Local Development
+
+Run the tests with:
+
+```bash
+uv run python -m unittest discover -s tests
+```
+
+Run only the repository setup tests with:
+
+```bash
+uv run python -m unittest tests.test_repo_setup
+```
+
+## Project Layout
+
+```text
+main.py                 CLI entrypoint
+src/agent.py            top-level LangGraph orchestrator
+src/subgraphs/          assistant and repo setup workflows
+src/nodes/              routing, local setup, and sandbox setup helpers
+src/tools/              local bash, skill reading, and Solari tools
+tests/                  unit tests
+examples/               inherited Solari cookbook examples
+```
+
+## About `examples/`
+
+The `examples/` directory comes from the forked Solari cookbook repository. It
+contains standalone Solari browser, sandbox, and desktop examples. ULTRON does not
+depend on those examples to run, but they are useful as reference programs for
+Solari API usage.
+
+## License
+
+This fork keeps the original MIT license from Pinetree Research. See
+[`LICENSE`](LICENSE).
