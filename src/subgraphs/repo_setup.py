@@ -1,11 +1,11 @@
+import json
 import os
 import re
-from typing import Any
+import shlex
+from operator import add
+from typing import Annotated, Any
 
 from dotenv import load_dotenv
-import json
-from operator import add
-
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -14,8 +14,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
-from typing_extensions import Annotated, TypedDict
+from typing_extensions import TypedDict
 
+from src.middlewares.HITL import ask_question
 from src.nodes.context import compact_repo_setup_context
 from src.nodes.local import (
     CLONE_ROOT,
@@ -25,9 +26,8 @@ from src.nodes.local import (
     repo_name_from_url,
 )
 from src.nodes.script import sandbox_output_text, sandbox_setup_script
-from src.middlewares.HITL import ask_question
-from src.tools.SolariSandbox import SolariSandboxClient
 from src.tools.read_skill import read_skill
+from src.tools.SolariSandbox import SolariSandboxClient
 
 load_dotenv(override=True)
 
@@ -53,10 +53,8 @@ async def create_sandbox_clone_repo_and_install(
     repo_url: str,
     env_overrides: dict[str, str] | None = None,
     startup_command: str | None = None,
-    install_on_user_device: bool = True,
 ) -> dict[str, Any]:
     """Create a Solari sandbox, install and run a repo there, then install locally."""
-    install_on_user_device = True
     if not is_supported_git_url(repo_url):
         return {
             "ok": False,
@@ -135,7 +133,6 @@ async def create_sandbox_clone_repo_and_install(
         "sandbox_repo_profile": sandbox_profile,
         "sandbox_install": sandbox_install,
         "local_install": local_install,
-        "install_on_user_device": install_on_user_device,
         "fallback_questions": _fallback_questions(sandbox_output, local_install),
     }
 
@@ -288,6 +285,105 @@ def _latest_repo_url(messages: list[Any]) -> str | None:
     return None
 
 
+def _preferred_node_start_command(entrypoints: dict[str, Any], manifests: list[Any]) -> str | None:
+    scripts = entrypoints.get("node_scripts")
+    if not isinstance(scripts, dict):
+        return None
+
+    script_name = next(
+        (name for name in ["start", "dev", "serve", "preview"] if name in scripts),
+        None,
+    )
+    if not script_name:
+        return None
+
+    manifest_names = {str(manifest).rsplit("/", 1)[-1] for manifest in manifests}
+    if "pnpm-lock.yaml" in manifest_names:
+        manager = "pnpm"
+    elif "yarn.lock" in manifest_names:
+        manager = "yarn"
+    elif "bun.lock" in manifest_names or "bun.lockb" in manifest_names:
+        manager = "bun"
+    else:
+        manager = "npm"
+
+    if manager == "yarn":
+        return f"yarn {script_name}"
+    if manager == "npm" and script_name == "start":
+        return "npm start"
+    return f"{manager} run {script_name}"
+
+
+def _preferred_python_start_command(entrypoints: dict[str, Any], manifests: list[Any]) -> str | None:
+    python_entrypoints = entrypoints.get("python")
+    if not python_entrypoints:
+        return None
+
+    first_entrypoint = str(python_entrypoints[0])
+    manifest_names = {str(manifest).rsplit("/", 1)[-1] for manifest in manifests}
+    if "uv.lock" in manifest_names or "pyproject.toml" in manifest_names:
+        return f"uv run python {shlex.quote(first_entrypoint)}"
+    if any(name.startswith(("requirement", "requirements")) for name in manifest_names):
+        return f".venv/bin/python {shlex.quote(first_entrypoint)}"
+    return f"python3 {shlex.quote(first_entrypoint)}"
+
+
+def _detected_start_command(
+    candidates: list[Any],
+    entrypoints: dict[str, Any],
+    manifests: list[Any],
+) -> str | None:
+    if candidates:
+        return str(candidates[0])
+    if not isinstance(entrypoints, dict):
+        return None
+
+    node_command = _preferred_node_start_command(entrypoints, manifests)
+    if node_command:
+        return node_command
+
+    python_command = _preferred_python_start_command(entrypoints, manifests)
+    if python_command:
+        return python_command
+
+    if isinstance(entrypoints, dict):
+        if entrypoints.get("go"):
+            return "go run ."
+        if entrypoints.get("rust"):
+            return "cargo run"
+        if entrypoints.get("make"):
+            return "make run"
+
+    return None
+
+
+def _next_steps_message(
+    local_path: str | None,
+    start_command: str | None,
+    control_url: str | None = None,
+) -> str:
+    parts = ["Next steps:"]
+    if local_path:
+        quoted_path = shlex.quote(local_path)
+        parts.extend(
+            [
+                f"Open the project: cd {quoted_path}",
+                f"Open it in VS Code: code {quoted_path}",
+            ]
+        )
+    if start_command:
+        parts.append(f"Start command: {start_command}")
+        parts.append("Then open the local URL printed by the command in your browser.")
+    else:
+        parts.append(
+            "Start command: Not detected automatically. "
+            "Check the README or manifest scripts in the local project folder."
+        )
+    if control_url:
+        parts.append(f"Sandbox console: {control_url}")
+    return "\n".join(parts)
+
+
 def _setup_final_message(payload: dict[str, Any]) -> str:
     repo_name = payload.get("repo_name") or "repository"
     local_install = payload.get("local_install") if isinstance(payload.get("local_install"), dict) else {}
@@ -308,6 +404,14 @@ def _setup_final_message(payload: dict[str, Any]) -> str:
             manifests = sandbox_profile.get("manifests") or []
         if not entrypoints:
             entrypoints = sandbox_profile.get("entrypoints") or {}
+
+    local_path = local_install.get("repo_path") if isinstance(local_install, dict) else None
+    start_command = _detected_start_command(candidates, entrypoints, manifests)
+    next_steps = _next_steps_message(
+        str(local_path) if local_path else None,
+        start_command,
+        sandbox.get("control_url"),
+    )
 
     if not payload.get("ok"):
         sandbox_output = sandbox_output_text(sandbox_install)
@@ -330,6 +434,7 @@ def _setup_final_message(payload: dict[str, Any]) -> str:
             parts.append(f"Manifests found: {', '.join(str(item) for item in manifests)}.")
         if candidates:
             parts.append(f"Startup command found from docs: {candidates[0]}.")
+        parts.append(next_steps)
         return "\n".join(part for part in parts if part and not part.endswith("None"))
 
     parts = [
@@ -346,6 +451,7 @@ def _setup_final_message(payload: dict[str, Any]) -> str:
     python_entrypoints = entrypoints.get("python") if isinstance(entrypoints, dict) else None
     if python_entrypoints:
         parts.append(f"Entrypoints found: {', '.join(str(item) for item in python_entrypoints[:3])}.")
+    parts.append(next_steps)
     return "\n".join(part for part in parts if part and not part.endswith("None"))
 
 
@@ -387,7 +493,6 @@ Rules:
 - After install_missing_setup_tools succeeds, call create_sandbox_clone_repo_and_install again to retry the sandbox gate and then the local dependency install.
 - If the user provides environment variables, credentials, or a startup command, call create_sandbox_clone_repo_and_install again with env_overrides and startup_command when applicable.
 - If sandbox output reports NO_SMOKE_COMMAND_FOUND or a similar startup detection failure, use the repo_startup_discovery skill instructions when explaining what command discovery looked for and what the repository is missing.
-- Always install_on_user_device=true.
 - Never clone or install the repository on the local machine unless the sandbox clone, security scan, install, and smoke run completed successfully first.
 - Do not look for or run the target repository's own tests. Security scan, sandbox install, and smoke run are the required safety gates.
 - The repository is cloned outside this current project, in the parent directory of PROJECT_ROOT: {CLONE_ROOT}
@@ -443,7 +548,6 @@ Rules:
         result = await create_sandbox_clone_repo_and_install.ainvoke(
             {
                 "repo_url": repo_url,
-                "install_on_user_device": True,
             }
         )
         return {

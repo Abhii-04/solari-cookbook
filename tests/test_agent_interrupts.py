@@ -2,8 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
-from langgraph.types import Interrupt
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt
 
 from src.agent import Agent
 

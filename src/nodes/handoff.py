@@ -5,7 +5,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
-from langgraph_supervisor.handoff import METADATA_KEY_HANDOFF_DESTINATION
+
+METADATA_KEY_HANDOFF_DESTINATION = "__handoff_destination__"
 
 
 def _normalize_agent_name(agent_name: str) -> str:

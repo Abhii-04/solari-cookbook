@@ -1,20 +1,12 @@
-import unittest
 import json
-from tempfile import TemporaryDirectory
+import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.middlewares.repository_setup_logs import repo_setup_terminal_log
-from src.subgraphs.repo_setup import (
-    RepoSetupWorkflow,
-    _fallback_question_from_messages,
-    _latest_repo_url,
-    _setup_final_message,
-    _sandbox_install_failure_summary,
-    _sandbox_repo_profile,
-)
 from src.nodes.local import (
     _install_python_dependencies,
     _install_results_ok,
@@ -25,6 +17,14 @@ from src.nodes.local import (
     install_missing_setup_tools,
 )
 from src.nodes.script import sandbox_setup_script
+from src.subgraphs.repo_setup import (
+    RepoSetupWorkflow,
+    _fallback_question_from_messages,
+    _latest_repo_url,
+    _sandbox_install_failure_summary,
+    _sandbox_repo_profile,
+    _setup_final_message,
+)
 from src.tools.SolariSandbox import DEFAULT_CALL_TIMEOUT_MS, SolariSandbox
 
 
@@ -485,7 +485,7 @@ class SandboxSetupScriptTests(unittest.TestCase):
             {
                 "ok": True,
                 "repo_name": "Simple-Flask-Api",
-                "sandbox": {"sandbox_id": "sandbox-1"},
+                "sandbox": {"sandbox_id": "sandbox-1", "control_url": "https://sandbox.example"},
                 "sandbox_repo_path": "/workspace/Simple-Flask-Api-1234",
                 "sandbox_repo_profile": {
                     "manifests": ["requirements.txt"],
@@ -505,6 +505,36 @@ class SandboxSetupScriptTests(unittest.TestCase):
         self.assertIn("Setup complete for Simple-Flask-Api.", message)
         self.assertIn("Local path: /home/abhishek/Documents/Simple-Flask-Api", message)
         self.assertIn("Startup command found from docs: flask run --host 0.0.0.0.", message)
+        self.assertTrue(message.endswith("Sandbox console: https://sandbox.example"))
+        self.assertIn("Next steps:", message)
+        self.assertIn("Open the project: cd /home/abhishek/Documents/Simple-Flask-Api", message)
+        self.assertIn("Open it in VS Code: code /home/abhishek/Documents/Simple-Flask-Api", message)
+        self.assertIn("Start command: flask run --host 0.0.0.0", message)
+        self.assertIn("Then open the local URL printed by the command in your browser.", message)
+
+    def test_setup_final_message_uses_package_script_when_docs_have_no_start_command(self):
+        message = _setup_final_message(
+            {
+                "ok": True,
+                "repo_name": "vite-demo",
+                "sandbox": {"sandbox_id": "sandbox-1"},
+                "sandbox_repo_path": "/workspace/vite-demo-1234",
+                "local_install": {
+                    "repo_path": "/home/abhishek/Documents/vite-demo",
+                    "repo_profile": {
+                        "manifests": ["package.json", "pnpm-lock.yaml"],
+                        "entrypoints": {
+                            "node_scripts": {
+                                "dev": "vite --host 0.0.0.0",
+                                "build": "vite build",
+                            }
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertIn("Start command: pnpm run dev", message)
 
     def test_setup_final_message_summarizes_failure_without_retry_loop(self):
         message = _setup_final_message(
@@ -543,6 +573,8 @@ class SandboxSetupScriptTests(unittest.TestCase):
         self.assertIn("Setup could not complete for Simple-Flask-Api.", message)
         self.assertIn("INSTALL_END /workspace/Simple-Flask-Api-1234 1", message)
         self.assertIn("I stopped instead of retrying the same setup step again.", message)
+        self.assertIn("Next steps:", message)
+        self.assertIn("Start command: flask run --host 0.0.0.0", message)
 
     def test_route_after_tools_finalizes_successful_setup(self):
         workflow = object.__new__(RepoSetupWorkflow)
