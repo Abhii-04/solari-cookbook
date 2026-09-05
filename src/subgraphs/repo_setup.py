@@ -1,11 +1,12 @@
-import json
 import os
 import re
 import shlex
-from operator import add
-from typing import Annotated, Any
+from typing import Any
 
 from dotenv import load_dotenv
+import json
+from operator import add
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -14,9 +15,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
-from typing_extensions import TypedDict
+from typing_extensions import Annotated, TypedDict
 
-from src.middlewares.HITL import ask_question
 from src.nodes.context import compact_repo_setup_context
 from src.nodes.local import (
     CLONE_ROOT,
@@ -26,8 +26,9 @@ from src.nodes.local import (
     repo_name_from_url,
 )
 from src.nodes.script import sandbox_output_text, sandbox_setup_script
-from src.tools.read_skill import read_skill
+from src.middlewares.HITL import ask_question
 from src.tools.SolariSandbox import SolariSandboxClient
+from src.tools.read_skill import read_skill
 
 load_dotenv(override=True)
 
@@ -53,8 +54,10 @@ async def create_sandbox_clone_repo_and_install(
     repo_url: str,
     env_overrides: dict[str, str] | None = None,
     startup_command: str | None = None,
+    install_on_user_device: bool = True,
 ) -> dict[str, Any]:
     """Create a Solari sandbox, install and run a repo there, then install locally."""
+    install_on_user_device = True
     if not is_supported_git_url(repo_url):
         return {
             "ok": False,
@@ -133,6 +136,7 @@ async def create_sandbox_clone_repo_and_install(
         "sandbox_repo_profile": sandbox_profile,
         "sandbox_install": sandbox_install,
         "local_install": local_install,
+        "install_on_user_device": install_on_user_device,
         "fallback_questions": _fallback_questions(sandbox_output, local_install),
     }
 
@@ -346,13 +350,12 @@ def _detected_start_command(
     if python_command:
         return python_command
 
-    if isinstance(entrypoints, dict):
-        if entrypoints.get("go"):
-            return "go run ."
-        if entrypoints.get("rust"):
-            return "cargo run"
-        if entrypoints.get("make"):
-            return "make run"
+    if entrypoints.get("go"):
+        return "go run ."
+    if entrypoints.get("rust"):
+        return "cargo run"
+    if entrypoints.get("make"):
+        return "make run"
 
     return None
 
@@ -493,6 +496,7 @@ Rules:
 - After install_missing_setup_tools succeeds, call create_sandbox_clone_repo_and_install again to retry the sandbox gate and then the local dependency install.
 - If the user provides environment variables, credentials, or a startup command, call create_sandbox_clone_repo_and_install again with env_overrides and startup_command when applicable.
 - If sandbox output reports NO_SMOKE_COMMAND_FOUND or a similar startup detection failure, use the repo_startup_discovery skill instructions when explaining what command discovery looked for and what the repository is missing.
+- Always install_on_user_device=true.
 - Never clone or install the repository on the local machine unless the sandbox clone, security scan, install, and smoke run completed successfully first.
 - Do not look for or run the target repository's own tests. Security scan, sandbox install, and smoke run are the required safety gates.
 - The repository is cloned outside this current project, in the parent directory of PROJECT_ROOT: {CLONE_ROOT}
@@ -548,6 +552,7 @@ Rules:
         result = await create_sandbox_clone_repo_and_install.ainvoke(
             {
                 "repo_url": repo_url,
+                "install_on_user_device": True,
             }
         )
         return {

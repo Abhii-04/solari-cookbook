@@ -4,11 +4,7 @@ import unittest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph.message import add_messages
 
-from src.nodes.context import (
-    MAX_SUMMARY_CHARS,
-    SUMMARY_MESSAGE_ID,
-    compact_repo_setup_context,
-)
+from src.nodes.context import MAX_SUMMARY_CHARS, SUMMARY_MESSAGE_ID, compact_repo_setup_context
 
 
 class RepoSetupContextManagerTests(unittest.TestCase):

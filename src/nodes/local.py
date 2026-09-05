@@ -9,12 +9,21 @@ from langchain_core.tools import tool
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CLONE_ROOT = PROJECT_ROOT.parent
-DOC_FILE_NAMES = ["README.md", "README.rst","README.txt","docs/README.md","CONTRIBUTING.md","DEVELOPMENT.md","INSTALL.md",]
+DOC_FILE_NAMES = [
+    "README.md",
+    "README.rst",
+    "README.txt",
+    "docs/README.md",
+    "CONTRIBUTING.md",
+    "DEVELOPMENT.md",
+    "INSTALL.md",
+]
 
 
 def repo_name_from_url(repo_url: str) -> str:
     name = repo_url.rstrip("/").rsplit("/", 1)[-1]
-    name = name.removesuffix(".git")
+    if name.endswith(".git"):
+        name = name[:-4]
     name = re.sub(r"[^A-Za-z0-9._-]", "-", name).strip(".-")
     if not name:
         raise ValueError("Could not determine a repository folder name from the URL.")
@@ -169,7 +178,7 @@ def _is_ignored_path(path: Path) -> bool:
 def _read_text_safely(path: Path, max_chars: int = 20_000) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
+    except Exception:
         return {"path": str(path), "readable": False, "content": "", "truncated": False}
 
     return {
@@ -203,7 +212,7 @@ def _package_scripts(repo_path: Path) -> dict[str, Any]:
         return {}
     try:
         package = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-    except (OSError, json.JSONDecodeError):
+    except Exception:
         return {}
     scripts = package.get("scripts") if isinstance(package, dict) else {}
     return scripts if isinstance(scripts, dict) else {}
@@ -256,7 +265,10 @@ def _is_dependency_manifest(
         "test",
         "tests",
     }
-    return not any(part.lower() in non_project_dirs for part in rel.parts[:-1])
+    if any(part.lower() in non_project_dirs for part in rel.parts[:-1]):
+        return False
+
+    return True
 
 
 def _requirement_files(project_path: Path) -> list[Path]:
@@ -548,9 +560,10 @@ def _repo_profile(repo_path: Path) -> dict[str, Any]:
 def clone_repo_and_install_dependencies(
     repo_url: str,
     sandbox_checks_passed: bool = False,
+    sandbox_test_passed: bool = False,
 ) -> dict[str, Any]:
     """Clone a Git repository beside this project and install dependencies from common manifest files."""
-    if not sandbox_checks_passed:
+    if not (sandbox_checks_passed or sandbox_test_passed):
         return {
             "ok": False,
             "repo_url": repo_url,

@@ -1,6 +1,6 @@
 from langchain_core.messages import HumanMessage
-
 from src.config.state import State
+
 
 REPO_SETUP_TEXT = ["github.com/", "git@github.com:", "clone","repo","repository","install", "setup", "set up", "sandbox",]
 ASSISTANT_TEXT = ["solari", "sandbox", "desktop", "browser", "code", "bash"]

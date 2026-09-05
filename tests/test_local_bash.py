@@ -1,8 +1,8 @@
+import unittest
 import os
 import signal
-import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
+from pathlib import Path
 
 from src.tools.bash import (
     BACKGROUND_PROCESSES,

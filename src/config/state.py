@@ -1,8 +1,8 @@
 from operator import add
-from typing import Annotated, Any
+
+from typing_extensions import Annotated, Any, TypedDict
 
 from langgraph.graph.message import add_messages
-from typing_extensions import TypedDict
 
 
 def latest_value(_left: Any, right: Any) -> Any:
@@ -14,4 +14,7 @@ class State(TypedDict, total=False):
     next: Annotated[Any, latest_value]
     user_id: str
     task_instructions: str
+    feedback_on_work: str
+    internet_skill: str
+    linkedin_skill: str
     setup_logs: Annotated[list[str], add]

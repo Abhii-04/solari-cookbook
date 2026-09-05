@@ -1,12 +1,20 @@
-import json
 import unittest
-from pathlib import Path
+import json
 from tempfile import TemporaryDirectory
+from pathlib import Path
 from unittest.mock import patch
 
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.middlewares.repository_setup_logs import repo_setup_terminal_log
+from src.subgraphs.repo_setup import (
+    RepoSetupWorkflow,
+    _fallback_question_from_messages,
+    _latest_repo_url,
+    _setup_final_message,
+    _sandbox_install_failure_summary,
+    _sandbox_repo_profile,
+)
 from src.nodes.local import (
     _install_python_dependencies,
     _install_results_ok,
@@ -17,14 +25,6 @@ from src.nodes.local import (
     install_missing_setup_tools,
 )
 from src.nodes.script import sandbox_setup_script
-from src.subgraphs.repo_setup import (
-    RepoSetupWorkflow,
-    _fallback_question_from_messages,
-    _latest_repo_url,
-    _sandbox_install_failure_summary,
-    _sandbox_repo_profile,
-    _setup_final_message,
-)
 from src.tools.SolariSandbox import DEFAULT_CALL_TIMEOUT_MS, SolariSandbox
 
 
