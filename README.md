@@ -93,14 +93,4 @@ tests/                  unit tests
 examples/               inherited Solari cookbook examples
 ```
 
-## About `examples/`
 
-The `examples/` directory comes from the forked Solari cookbook repository. It
-contains standalone Solari browser, sandbox, and desktop examples. ULTRON does not
-depend on those examples to run, but they are useful as reference programs for
-Solari API usage.
-
-## License
-
-This fork keeps the original MIT license from Pinetree Research. See
-[`LICENSE`](LICENSE).
