@@ -13,9 +13,9 @@ from langgraph.types import Command
 
 from src.config.state import State
 from src.middlewares.repository_setup_logs import repo_setup_terminal_log
-from src.nodes.dynamic_agent_selector import dynamic_agent_router, dynamic_router
-from src.nodes.handle_tool_error import handle_tool_error
-from src.nodes.handoff import create_task_instructions_handoff_tool
+from src.middlewares.dynamic_agent_selector import dynamic_agent_router, dynamic_router
+from src.middlewares.handle_tool_error import handle_tool_error
+from src.middlewares.handoff import create_task_instructions_handoff_tool
 from src.subgraphs.assistant import Assistant
 from src.subgraphs.repo_setup import RepoSetupWorkflow
 
@@ -35,8 +35,6 @@ class Agent:
         self.agent_id = None
         self.checkpointer = None
         self.store = None
-        self.assistant_agent = None
-        self.repo_setup_agent = None
         self.repo_setup_graph = None
         self.orchestrator_agent = None
         self.handoff_tools = []
@@ -61,12 +59,10 @@ class Agent:
         assistant.setup()
         await assistant.build_graph()
         self.assistant_graph = assistant.graph
-        self.assistant_agent = assistant
 
         repo_setup = RepoSetupWorkflow()
         await repo_setup.build_graph()
         self.repo_setup_graph = repo_setup.graph
-        self.repo_setup_agent = repo_setup
 
         self.checkpointer = InMemorySaver()
         self.store = InMemoryStore()
@@ -223,22 +219,76 @@ class Agent:
         if messages:
             print(messages[-1].content)
 
+    def _print_progress(self, event: Any) -> None:
+        if not isinstance(event, dict):
+            return
+        if event.get("type") != "repo_setup_progress":
+            return
+
+        message = event.get("message")
+        if not message:
+            return
+
+        details = []
+        if event.get("elapsed_seconds") is not None:
+            details.append(f"{event['elapsed_seconds']}s")
+        if event.get("dependency_count") is not None:
+            details.append(f"{event['dependency_count']} deps")
+        if event.get("status") is not None:
+            details.append(f"status={event['status']}")
+        if event.get("local_path"):
+            details.append(str(event["local_path"]))
+
+        suffix = f" ({', '.join(details)})" if details else ""
+        print(f"[repo-setup] {message}{suffix}")
+
+    async def _run_graph(self, graph_input: Any, config: dict[str, Any]) -> dict[str, Any]:
+        if not hasattr(self.graph, "astream"):
+            return await self.graph.ainvoke(graph_input, config=config)
+
+        latest_result: dict[str, Any] = {}
+        async for item in self.graph.astream(
+            graph_input,
+            config=config,
+            stream_mode=["custom", "values"],
+            subgraphs=True,
+        ):
+            namespace = ()
+            if isinstance(item, tuple) and len(item) == 3:
+                namespace, mode, payload = item
+            else:
+                mode, payload = None, item
+
+            if mode == "custom":
+                self._print_progress(payload)
+            elif mode == "values" and namespace == () and isinstance(payload, dict):
+                latest_result = payload
+
+        if latest_result:
+            return latest_result
+
+        snapshot = await self.graph.aget_state(config, subgraphs=False)
+        values = getattr(snapshot, "values", None)
+        return values if isinstance(values, dict) else {}
+
     async def run_superstep(self, message, history, user_id: str = "default"):
         _ = history
         config = self._thread_config()
         pending_question = await self._pending_interrupt_question(config)
 
         if self.pending_interrupt or pending_question:
-            result = await self.graph.ainvoke(
+            print("[agent] Resuming paused workflow")
+            result = await self._run_graph(
                 Command(resume=self._resume_value(message)),
                 config=config,
             )
         else:
+            print("[agent] Starting request")
             state = {
                 "messages": [HumanMessage(content=message)],
                 "user_id": user_id,
             }
-            result = await self.graph.ainvoke(state, config=config)
+            result = await self._run_graph(state, config=config)
 
         pending_question = await self._pending_interrupt_question(config)
         self._print_result(result, pending_question=pending_question)

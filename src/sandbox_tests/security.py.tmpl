@@ -1,0 +1,64 @@
+def suspicious_text_reason(text):
+    checks = [
+        ("curl or wget piped into a shell", ("curl ", "wget "), ("| sh", "| bash", "|bash", "|sh")),
+        ("destructive root filesystem removal", ("rm -rf /", "rm -fr /"), ()),
+        ("reverse shell pattern", ("nc -e ", "ncat -e ", "bash -i >&", "/dev/tcp/"), ()),
+        ("base64 decoded shell execution", ("base64 -d", "base64 --decode"), ("| sh", "| bash", "|bash", "|sh")),
+        ("chmod 777 permission broadening", ("chmod 777",), ()),
+        ("sudo command in repository automation", ("sudo ",), ()),
+    ]
+    lowered = text.lower()
+    for reason, required_any, paired_any in checks:
+        if not any(token in lowered for token in required_any):
+            continue
+        if paired_any and not any(token in lowered for token in paired_any):
+            continue
+        return reason
+    return None
+
+
+def security_findings(directory):
+    findings = []
+    lifecycle_scripts = {
+        "preinstall",
+        "install",
+        "postinstall",
+        "prepublish",
+        "prepublishonly",
+        "prepare",
+    }
+    scanned_suffixes = {
+        ".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx",
+        ".py", ".sh", ".bash", ".zsh", ".fish", ".ps1",
+        ".rb", ".php", ".pl", ".go", ".rs", ".yml", ".yaml",
+        ".toml", ".json",
+    }
+
+    for path in sorted(directory.rglob("*")):
+        rel = path.relative_to(directory)
+        if ignored(rel) or not path.is_file():
+            continue
+
+        if path.name == "package.json":
+            package = package_json(path.parent)
+            scripts = package.get("scripts")
+            if isinstance(scripts, dict):
+                for name, command in sorted(scripts.items()):
+                    if name.lower() in lifecycle_scripts:
+                        findings.append(f"{rel}: npm lifecycle script '{name}' runs during install")
+                    if isinstance(command, str):
+                        reason = suspicious_text_reason(command)
+                        if reason:
+                            findings.append(f"{rel}: script '{name}' contains {reason}")
+
+        if path.suffix.lower() not in scanned_suffixes and path.name not in {"Makefile", "Dockerfile"}:
+            continue
+
+        text = read_text_safely(path)
+        if text is None:
+            continue
+        reason = suspicious_text_reason(text)
+        if reason:
+            findings.append(f"{rel}: {reason}")
+
+    return findings

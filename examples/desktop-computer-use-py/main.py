@@ -40,8 +40,6 @@ async def main() -> None:
                     break
                 await asyncio.sleep(1)
 
-            width, height = 1280, 720
-
             # Open an app by name and give it a moment to map its window. The
             # `default` template ships mousepad, thunar, Chrome, VS Code and
             # LibreOffice — `open()` fails if the binary isn't in the image, so

@@ -1,0 +1,287 @@
+import json
+import os
+import shlex
+import subprocess
+import uuid
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
+from pathlib import Path
+
+repo_url = ${repo_url_literal}
+repo_name = ${repo_name_literal}
+env_overrides = ${env_overrides_literal}
+startup_command = ${startup_command_literal}
+socket_api_token_override = ${socket_api_token_literal}
+workspace = Path("/workspace")
+repo_path = workspace / f"{repo_name}-{uuid.uuid4().hex[:8]}"
+workspace.mkdir(parents=True, exist_ok=True)
+
+
+def run(command, cwd, timeout=900, timeout_ok=False, env=None):
+    print(f"$$ {' '.join(command)}", flush=True)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if exc.stdout:
+            print(exc.stdout, end="", flush=True)
+        if exc.stderr:
+            print(exc.stderr, end="", flush=True)
+        print(f"TIMEOUT {timeout}", flush=True)
+        returncode = 0 if timeout_ok else 124
+        print(f"EXIT {returncode}", flush=True)
+        return returncode
+
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    if result.stderr:
+        print(result.stderr, end="", flush=True)
+    print(f"EXIT {result.returncode}", flush=True)
+    return result.returncode
+
+
+def status_label(returncode):
+    return "PASS" if returncode == 0 else "FAIL"
+
+
+def run_logged(phase, command, cwd, timeout=900, timeout_ok=False, env=None):
+    print(f"{phase}_COMMAND_BEGIN {' '.join(command)}", flush=True)
+    returncode = run(command, cwd, timeout=timeout, timeout_ok=timeout_ok, env=env)
+    print(f"{phase}_COMMAND_STATUS {status_label(returncode)} {returncode}", flush=True)
+    print(f"{phase}_COMMAND_END {' '.join(command)}", flush=True)
+    return returncode
+
+
+def has(command):
+    return subprocess.run(
+        ["sh", "-lc", f"command -v {command} >/dev/null 2>&1"]
+    ).returncode == 0
+
+
+def missing_tool(command):
+    print(f"MISSING_TOOL {command}", flush=True)
+
+
+def apt_install(packages, directory):
+    if not has("apt-get"):
+        return False
+    command = ["apt-get", "update"]
+    if run(command, directory, timeout=300) != 0:
+        return False
+    command = ["apt-get", "install", "-y"] + packages
+    return run(command, directory, timeout=900) == 0
+
+
+def bootstrap_tool(tool_name, packages, directory):
+    if has(tool_name):
+        return True
+    print(f"BOOTSTRAP_BEGIN {tool_name}", flush=True)
+    ok = apt_install(packages, directory)
+    print(f"BOOTSTRAP_END {tool_name} {status_label(0 if ok else 1)}", flush=True)
+    return has(tool_name)
+
+
+def ensure_python_runtime(directory):
+    if has("python3"):
+        return True
+    if bootstrap_tool("python3", ["python3", "python3-pip", "python3-venv"], directory):
+        return True
+    missing_tool("python3")
+    return False
+
+
+def python_venv_candidates(directory):
+    if not ensure_python_runtime(directory):
+        return []
+    candidates = []
+    for command in ["python3.11", "python3.10", "python3.12", "python3"]:
+        if has(command) and command not in candidates:
+            candidates.append(command)
+    return candidates
+
+
+def ensure_python_build_tools(directory):
+    print("BOOTSTRAP_BEGIN python-build-tools", flush=True)
+    ok = apt_install(["build-essential", "python3-dev"], directory)
+    print(f"BOOTSTRAP_END python-build-tools {status_label(0 if ok else 1)}", flush=True)
+    if not ok:
+        missing_tool("build-essential")
+    return ok
+
+
+def ensure_python_venv_support(directory):
+    print("BOOTSTRAP_BEGIN python-venv", flush=True)
+    ok = apt_install(["python3-venv", "python3-pip"], directory)
+    print(f"BOOTSTRAP_END python-venv {status_label(0 if ok else 1)}", flush=True)
+    if not ok:
+        missing_tool("python3-venv")
+    return ok
+
+
+def ensure_node_runtime(directory):
+    if has("node") and has("npm"):
+        return True
+    print("BOOTSTRAP_BEGIN nodejs", flush=True)
+    ok = apt_install(["nodejs", "npm"], directory)
+    print(f"BOOTSTRAP_END nodejs {status_label(0 if ok else 1)}", flush=True)
+    if has("node") and has("npm"):
+        return True
+    missing_tool("npm")
+    return False
+
+
+def node_major_version():
+    if not has("node"):
+        return None
+    result = subprocess.run(
+        ["node", "--version"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    version = result.stdout.strip().lstrip("v")
+    try:
+        return int(version.split(".", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_go_runtime(directory):
+    if has("go"):
+        return True
+    if bootstrap_tool("go", ["golang-go"], directory):
+        return True
+    missing_tool("go")
+    return False
+
+
+def ensure_rust_runtime(directory):
+    if has("cargo"):
+        return True
+    if bootstrap_tool("cargo", ["cargo"], directory):
+        return True
+    missing_tool("cargo")
+    return False
+
+
+def ensure_ruby_runtime(directory):
+    if has("bundle"):
+        return True
+    print("BOOTSTRAP_BEGIN bundle", flush=True)
+    ok = apt_install(["ruby-full", "ruby-bundler"], directory)
+    print(f"BOOTSTRAP_END bundle {status_label(0 if ok else 1)}", flush=True)
+    if has("bundle"):
+        return True
+    missing_tool("bundle")
+    return False
+
+
+def ensure_php_composer(directory):
+    if has("composer"):
+        return True
+    if bootstrap_tool("composer", ["composer", "php-cli"], directory):
+        return True
+    missing_tool("composer")
+    return False
+
+
+def ensure_node_manager(command, directory):
+    if command in {"npm", "pnpm", "yarn"} and not ensure_node_runtime(directory):
+        return False
+    if has(command):
+        return True
+    if command in {"pnpm", "yarn"} and has("corepack"):
+        if run(["corepack", "enable", command], directory) == 0 and has(command):
+            return True
+    if command in {"pnpm", "yarn"} and has("npm"):
+        if run(["npm", "install", "-g", command], directory) == 0 and has(command):
+            return True
+    return False
+
+
+def has_python_module(module):
+    return has("python3") and subprocess.run(
+        ["python3", "-m", module, "--version"],
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+
+
+def uv_command(directory):
+    if not ensure_python_runtime(directory):
+        return None
+    if has("uv"):
+        return ["uv"]
+    if has_python_module("uv"):
+        return ["python3", "-m", "uv"]
+    if has("python3"):
+        run(["python3", "-m", "pip", "install", "--user", "uv"], directory)
+        if has_python_module("uv"):
+            return ["python3", "-m", "uv"]
+    return None
+
+
+def create_python_venv(directory):
+    interpreters = python_venv_candidates(directory)
+    if not interpreters:
+        return 1
+
+    commands = []
+    if has("uv"):
+        commands.append(["uv", "venv", "--python", "3.11"])
+        commands.extend([["uv", "venv", "--python", interpreter] for interpreter in interpreters])
+    commands.extend([[interpreter, "-m", "venv", ".venv"] for interpreter in interpreters])
+
+    for command in commands:
+        status = run(command, directory)
+        if status == 0:
+            return 0
+        if command[1:3] == ["-m", "venv"]:
+            if ensure_python_venv_support(directory):
+                status = run(command, directory)
+                if status == 0:
+                    return 0
+    return 1
+
+
+def install_requirement_file(directory, requirements_file):
+    if has("uv"):
+        command = [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            ".venv/bin/python",
+            "-r",
+            requirements_file.name,
+        ]
+    else:
+        command = [
+            ".venv/bin/python",
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            requirements_file.name,
+        ]
+
+    status = run(command, directory)
+    if status == 0:
+        return 0
+
+    if ensure_python_build_tools(directory):
+        print(f"INSTALL_RETRY {requirements_file.name} after python-build-tools", flush=True)
+        status = run(command, directory)
+    return status

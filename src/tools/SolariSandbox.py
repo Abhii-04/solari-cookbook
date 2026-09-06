@@ -109,47 +109,6 @@ class SolariSandbox:
         finally:
             await client.aclose()
 
-    async def connect(self, sandbox_id: str):
-        client = self.client()
-        try:
-            sandbox = await client.connect(sandbox_id)
-            return {
-                "type": "sandbox",
-                "sandbox_id": sandbox.sandboxId,
-                "connected": bool(getattr(sandbox, "connected", False)),
-            }
-        finally:
-            await client.aclose()
-
-    async def get(self, sandbox_id: str):
-        client = self.client()
-        try:
-            sandbox = await client.get(sandbox_id)
-            return {
-                "type": "sandbox",
-                "sandbox_id": sandbox.sandboxId,
-                "kind": str(sandbox.kind),
-                "state": str(sandbox.state),
-                "metadata": sandbox.metadata,
-                "expires_at": sandbox.expiresAt,
-                "cpu": sandbox.cpu,
-                "mem_mb": sandbox.memMb,
-            }
-        finally:
-            await client.aclose()
-
-    async def kill(self, sandbox_id: str):
-        client = self.client()
-        try:
-            await client.kill(sandbox_id)
-            return {
-                "type": "sandbox",
-                "sandbox_id": sandbox_id,
-                "killed": True,
-            }
-        finally:
-            await client.aclose()
-
     async def run_code(
         self,
         sandbox_id: str,
@@ -225,24 +184,6 @@ async def solari_sandbox_create(
         volumes=volumes,
         connect=connect,
     )
-
-
-@tool
-async def solari_sandbox_connect(sandbox_id: str) -> dict[str, Any]:
-    """Connect to an existing Solari sandbox by sandbox_id."""
-    return await SolariSandboxClient().connect(sandbox_id)
-
-
-@tool
-async def solari_sandbox_get(sandbox_id: str) -> dict[str, Any]:
-    """Get details for an existing Solari sandbox by sandbox_id."""
-    return await SolariSandboxClient().get(sandbox_id)
-
-
-@tool
-async def solari_sandbox_kill(sandbox_id: str) -> dict[str, Any]:
-    """Kill an existing Solari sandbox by sandbox_id."""
-    return await SolariSandboxClient().kill(sandbox_id)
 
 
 @tool

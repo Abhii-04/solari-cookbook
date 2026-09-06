@@ -1,0 +1,54 @@
+def test_file_candidates(directory):
+    tests_dir = directory / "tests"
+    if not tests_dir.is_dir():
+        return []
+
+    test_suffixes = {
+        ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+        ".go", ".rs", ".rb", ".php", ".java", ".kt", ".cs",
+    }
+    candidates = []
+    for path in sorted(tests_dir.rglob("*")):
+        if ignored(path.relative_to(directory)) or not path.is_file():
+            continue
+        name = path.name.lower()
+        if path.suffix.lower() not in test_suffixes:
+            continue
+        if (
+            name.startswith("test")
+            or name.endswith("_test" + path.suffix.lower())
+            or ".test." in name
+            or ".spec." in name
+            or name.endswith("spec" + path.suffix.lower())
+        ):
+            candidates.append(path)
+    return candidates
+
+
+def run_generic_test_checks(directory):
+    tests_dir = directory / "tests"
+    if not tests_dir.is_dir():
+        print(f"NO_TEST_DIRECTORY {directory}", flush=True)
+        return 0
+
+    candidates = test_file_candidates(directory)
+    if not candidates:
+        print(f"NO_TEST_FILES_FOUND {directory}", flush=True)
+        return 1
+
+    status = 0
+    print(f"TEST_CHECK_BEGIN {directory}", flush=True)
+    for path in candidates:
+        rel = path.relative_to(directory)
+        text = read_text_safely(path, max_bytes=2_000_000)
+        if text is None:
+            print(f"TEST_CHECK_STATUS FAIL unreadable {rel}", flush=True)
+            status = 1
+            continue
+        if not text.strip():
+            print(f"TEST_CHECK_STATUS FAIL empty {rel}", flush=True)
+            status = 1
+            continue
+        print(f"TEST_CHECK_STATUS PASS {rel}", flush=True)
+    print(f"TEST_CHECK_END {directory} {status}", flush=True)
+    return status

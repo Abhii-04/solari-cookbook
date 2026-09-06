@@ -1,0 +1,217 @@
+def env_hints(directory):
+    candidates = []
+    for name in [".env.example", ".env.sample", "example.env", "env.example"]:
+        path = directory / name
+        if not path.exists():
+            continue
+        text = read_text_safely(path, max_bytes=100_000)
+        if not text:
+            continue
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key:
+                candidates.append(key)
+    return sorted(set(candidates))
+
+
+def file_excerpt(path, max_chars=20_000):
+    text = read_text_safely(path, max_bytes=max_chars * 2)
+    if text is None:
+        return {"path": str(path), "readable": False, "content": "", "truncated": False}
+    truncated = len(text) > max_chars
+    return {
+        "path": str(path),
+        "readable": True,
+        "content": text[:max_chars],
+        "truncated": truncated,
+    }
+
+
+def doc_files(directory):
+    names = [
+        "README.md",
+        "README.rst",
+        "README.txt",
+        "docs/README.md",
+        "CONTRIBUTING.md",
+        "DEVELOPMENT.md",
+        "INSTALL.md",
+    ]
+    return [directory / name for name in names if (directory / name).is_file()]
+
+
+def executable_for_command(directory, name):
+    if name == "flask" and (directory / ".venv/bin/flask").exists():
+        return ".venv/bin/flask"
+    if name == "python" and (directory / ".venv/bin/python").exists():
+        return ".venv/bin/python"
+    if name == "pip" and (directory / ".venv/bin/pip").exists():
+        return ".venv/bin/pip"
+    return name
+
+
+def safe_doc_command(directory, line):
+    stripped = line.strip()
+    if not stripped or stripped.startswith(("#", "$$", ">")):
+        return None
+    if suspicious_text_reason(stripped):
+        return None
+    try:
+        parts = shlex.split(stripped)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+
+    blocked_words = {
+        "install",
+        "test",
+        "pytest",
+        "unittest",
+        "deploy",
+        "publish",
+        "release",
+        "migrate",
+        "reset",
+        "destroy",
+    }
+    if any(part.lower() in blocked_words for part in parts):
+        return None
+
+    while parts and parts[0] in {"uv", "poetry", "pipenv"}:
+        if len(parts) >= 3 and parts[1] == "run":
+            parts = parts[2:]
+            break
+        return None
+
+    command = parts[0]
+    safe_script_names = {"start", "dev", "serve", "preview", "build"}
+    if command in {"python", "python3"} and len(parts) >= 2:
+        script = parts[1]
+        if script.endswith(".py") and (directory / script).is_file():
+            parts[0] = executable_for_command(directory, "python")
+            return parts
+        if script == "manage.py" and (directory / script).is_file() and "runserver" in parts:
+            parts[0] = executable_for_command(directory, "python")
+            return parts
+    if command == "flask" and len(parts) >= 2 and parts[1] == "run":
+        if any((directory / name).is_file() for name in ["app.py", "wsgi.py"]):
+            parts[0] = executable_for_command(directory, "flask")
+            if "--host" not in parts:
+                parts.extend(["--host", "0.0.0.0"])
+            return parts
+    if command in {"npm", "pnpm"} and (directory / "package.json").is_file():
+        if len(parts) >= 2 and parts[1] in safe_script_names:
+            return parts
+        if len(parts) >= 3 and parts[1] == "run" and parts[2] in safe_script_names:
+            return parts
+    if command == "yarn" and (directory / "package.json").is_file():
+        if len(parts) >= 2 and parts[1] in safe_script_names:
+            return parts
+        if len(parts) >= 3 and parts[1] == "run" and parts[2] in safe_script_names:
+            return parts
+    if command == "bun" and (directory / "package.json").is_file():
+        if len(parts) >= 2 and parts[1] in safe_script_names:
+            return parts
+        if len(parts) >= 3 and parts[1] == "run" and parts[2] in safe_script_names:
+            return parts
+    if command == "make" and len(parts) >= 2 and (directory / "Makefile").is_file():
+        if parts[1] in safe_script_names | {"run"}:
+            return parts
+    if command == "go" and len(parts) >= 2 and parts[1] == "run" and (directory / "go.mod").exists():
+        return parts
+    if command == "cargo" and len(parts) >= 2 and parts[1] == "run" and (directory / "Cargo.toml").exists():
+        return parts
+    if command == "bundle" and len(parts) >= 4 and (directory / "Gemfile").is_file():
+        if parts[1:4] == ["exec", "rails", "server"]:
+            return parts
+    if command == "ruby" and len(parts) >= 2 and (directory / "Gemfile").is_file():
+        script = parts[1]
+        if script.endswith(".rb") and (directory / script).is_file():
+            return parts
+    if command == "php" and len(parts) >= 2 and (directory / "composer.json").is_file():
+        if parts[1] == "-S":
+            return parts
+    if command == "composer" and len(parts) >= 2 and (directory / "composer.json").is_file():
+        if parts[1] in safe_script_names:
+            return parts
+    return None
+
+
+def readme_smoke_commands(directory, log=True):
+    commands = []
+    seen = set()
+    for path in doc_files(directory):
+        rel = path.relative_to(directory)
+        if log:
+            print(f"DOCS_READ {rel}", flush=True)
+        text = read_text_safely(path, max_bytes=200_000) or ""
+        in_fence = False
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if line.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if not in_fence:
+                lowered = line.lower()
+                if not any(token in lowered for token in ["run", "start", "serve", "python", "flask", "npm", "pnpm", "yarn", "bun", "go run", "cargo run", "make", "bundle", "ruby", "php", "composer"]):
+                    continue
+            command = safe_doc_command(directory, line)
+            if not command:
+                continue
+            key = tuple(command)
+            if key in seen:
+                continue
+            seen.add(key)
+            if log:
+                print(f"RUN_CANDIDATE docs {rel}: {' '.join(command)}", flush=True)
+            commands.append((command, 30, True))
+    return commands
+
+
+def command_strings(commands):
+    return [" ".join(command) for command, _timeout, _timeout_ok in commands]
+
+
+def repo_profile(directory, manifests):
+    docs = []
+    for path in doc_files(directory):
+        item = file_excerpt(path)
+        item["path"] = str(path.relative_to(directory))
+        docs.append(item)
+
+    package = package_json(directory)
+    scripts = package.get("scripts") if isinstance(package.get("scripts"), dict) else {}
+    python_files = [str(path.relative_to(directory)) for path in candidate_python_files(directory)]
+
+    return {
+        "repo_path": str(directory),
+        "files": file_inventory(directory),
+        "docs": docs,
+        "manifests": sorted(manifests),
+        "manifest_contents": [
+            dict(file_excerpt(directory / manifest, max_chars=10_000), path=manifest)
+            for manifest in sorted(manifests)
+            if (directory / manifest).is_file()
+        ],
+        "env_hints": env_hints(directory),
+        "entrypoints": {
+            "python": python_files,
+            "node_scripts": scripts,
+            "go": (directory / "go.mod").exists(),
+            "rust": (directory / "Cargo.toml").exists(),
+            "ruby": (directory / "Gemfile").exists(),
+            "php": (directory / "composer.json").exists(),
+            "make": (directory / "Makefile").exists(),
+        },
+        "readme_smoke_candidates": command_strings(readme_smoke_commands(directory, log=False)),
+    }
+
+
+def print_repo_profile(directory, manifests):
+    print("REPO_PROFILE_JSON_BEGIN", flush=True)
+    print(json.dumps(repo_profile(directory, manifests), sort_keys=True), flush=True)
+    print("REPO_PROFILE_JSON_END", flush=True)

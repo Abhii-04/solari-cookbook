@@ -1,0 +1,292 @@
+SOCKET_MCP_CLIENT_CODE = r'''
+import asyncio
+import json
+import os
+import re
+import sys
+import traceback
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+
+async def main():
+    packages = json.loads(sys.stdin.read() or "[]")
+    client = MultiServerMCPClient(
+        {
+            "socket-mcp": {
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["-y", "@socketsecurity/mcp@latest"],
+                "env": {"SOCKET_API_TOKEN": os.environ["SOCKET_API_TOKEN"]},
+            }
+        }
+    )
+    tools = await client.get_tools()
+    depscore = next(tool for tool in tools if tool.name == "depscore")
+    result = await depscore.ainvoke({"packages": packages})
+    rendered = json.dumps(result, default=str)
+    print("SOCKET_MCP_DEPSCORE_BEGIN", flush=True)
+    print(rendered, flush=True)
+    print("SOCKET_MCP_DEPSCORE_END", flush=True)
+
+    lowered = rendered.lower()
+    if "authentication failed" in lowered or "unauthorized" in lowered:
+        print("SOCKET_MCP_AUTH_FAILED", flush=True)
+        sys.exit(1)
+
+    risky_scores = []
+    for score_name, score in re.findall(r"(supplyChain|vulnerability):\s*(\d+)", rendered):
+        value = int(score)
+        if value < 20:
+            risky_scores.append(f"{score_name}:{value}")
+    for score in risky_scores:
+        print(f"SOCKET_MCP_LOW_SCORE {score}", flush=True)
+    if risky_scores:
+        sys.exit(1)
+
+
+def emit_exception(prefix, exc):
+    print(f"{prefix} {type(exc).__name__}: {exc}", flush=True)
+    if isinstance(exc, BaseExceptionGroup):
+        for index, sub_exception in enumerate(exc.exceptions, start=1):
+            emit_exception(f"{prefix}_CAUSE_{index}", sub_exception)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except Exception as exc:
+        emit_exception("SOCKET_MCP_ERROR", exc)
+        print("SOCKET_MCP_TRACEBACK_BEGIN", flush=True)
+        traceback.print_exc()
+        print("SOCKET_MCP_TRACEBACK_END", flush=True)
+        sys.exit(1)
+'''
+
+
+def package_version_string(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        version = value.get("version")
+        return version if isinstance(version, str) else "unknown"
+    return "unknown"
+
+
+def add_socket_package(packages, seen, ecosystem, depname, version="unknown"):
+    if not depname or depname.startswith((".", "/", "http:", "https:", "git+", "file:")):
+        return
+    key = (ecosystem, depname, version or "unknown")
+    if key in seen:
+        return
+    seen.add(key)
+    packages.append(
+        {
+            "ecosystem": ecosystem,
+            "depname": depname,
+            "version": version or "unknown",
+        }
+    )
+
+
+def requirement_dependency_name(line):
+    line = line.split("#", 1)[0].strip()
+    if not line or line.startswith(("-", "git+", "http:", "https:")):
+        return None
+    for marker in ["==", ">=", "<=", "~=", "!=", ">", "<", ";", "["]:
+        if marker in line:
+            line = line.split(marker, 1)[0]
+    return line.strip() or None
+
+
+def socket_mcp_packages(directory):
+    packages = []
+    seen = set()
+
+    package = package_json(directory)
+    for field in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]:
+        dependencies = package.get(field)
+        if not isinstance(dependencies, dict):
+            continue
+        for depname, version in sorted(dependencies.items()):
+            add_socket_package(packages, seen, "npm", depname, package_version_string(version))
+
+    pyproject = pyproject_data(directory)
+    project = pyproject.get("project") if isinstance(pyproject.get("project"), dict) else {}
+    for dependency in project.get("dependencies", []) if isinstance(project.get("dependencies"), list) else []:
+        depname = requirement_dependency_name(str(dependency))
+        if depname:
+            add_socket_package(packages, seen, "pypi", depname)
+    optional = project.get("optional-dependencies")
+    if isinstance(optional, dict):
+        for group in optional.values():
+            if not isinstance(group, list):
+                continue
+            for dependency in group:
+                depname = requirement_dependency_name(str(dependency))
+                if depname:
+                    add_socket_package(packages, seen, "pypi", depname)
+
+    for requirements_file in requirement_files(directory):
+        text = read_text_safely(requirements_file, max_bytes=500_000) or ""
+        for line in text.splitlines():
+            depname = requirement_dependency_name(line)
+            if depname:
+                add_socket_package(packages, seen, "pypi", depname)
+
+    cargo = {}
+    if (directory / "Cargo.toml").exists() and tomllib is not None:
+        try:
+            cargo = tomllib.loads((directory / "Cargo.toml").read_text())
+        except Exception:
+            cargo = {}
+    for field in ["dependencies", "dev-dependencies", "build-dependencies"]:
+        dependencies = cargo.get(field)
+        if not isinstance(dependencies, dict):
+            continue
+        for depname, version in sorted(dependencies.items()):
+            add_socket_package(packages, seen, "cargo", depname, package_version_string(version))
+
+    composer = {}
+    if (directory / "composer.json").exists():
+        try:
+            composer = json.loads((directory / "composer.json").read_text())
+        except Exception:
+            composer = {}
+    for field in ["require", "require-dev"]:
+        dependencies = composer.get(field)
+        if not isinstance(dependencies, dict):
+            continue
+        for depname, version in sorted(dependencies.items()):
+            if depname != "php" and not depname.startswith("ext-"):
+                add_socket_package(packages, seen, "composer", depname, package_version_string(version))
+
+    go_mod = directory / "go.mod"
+    if go_mod.exists():
+        text = read_text_safely(go_mod, max_bytes=500_000) or ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("//", "module ", "go ", "toolchain ", "require (", ")")):
+                continue
+            if stripped.startswith("require "):
+                stripped = stripped.removeprefix("require ").strip()
+            parts = stripped.split()
+            if len(parts) >= 2 and "." in parts[0]:
+                add_socket_package(packages, seen, "golang", parts[0], parts[1])
+
+    return packages
+
+
+def socket_api_token():
+    if socket_api_token_override:
+        return socket_api_token_override
+    for key in [
+        "SOCKET_API_TOKEN",
+        "SOCKET_API_KEY",
+        "SOCKET_CLI_API_TOKEN",
+        "SOCKET_CLI_API_KEY",
+        "SOCKET_SECURITY_API_TOKEN",
+        "SOCKET_SECURITY_API_KEY",
+    ]:
+        if os.environ.get(key):
+            return os.environ[key]
+    return None
+
+
+def python_module_available(module):
+    return has("python3") and subprocess.run(
+        ["python3", "-c", f"import {module}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+
+
+def ensure_socket_mcp_runtime(directory):
+    if not ensure_node_runtime(directory):
+        return False
+    major = node_major_version()
+    print(f"SOCKET_MCP_NODE_MAJOR {major}", flush=True)
+    if major is not None and major >= 24:
+        pass
+    elif has("npm") and run(["npm", "install", "-g", "n"], directory, timeout=900) == 0 and run(["n", "24"], directory, timeout=900) == 0:
+        major = node_major_version()
+        print(f"SOCKET_MCP_NODE_MAJOR {major}", flush=True)
+        if major is None or major < 24:
+            missing_tool("nodejs>=24")
+            return False
+    else:
+        missing_tool("nodejs>=24")
+        return False
+    if not ensure_python_runtime(directory):
+        return False
+    if python_module_available("langchain_mcp_adapters"):
+        return True
+    install_commands = [
+        ["python3", "-m", "pip", "install", "langchain-mcp-adapters"],
+        ["python3", "-m", "pip", "install", "--user", "langchain-mcp-adapters"],
+    ]
+    for command in install_commands:
+        if run(command, directory, timeout=900) != 0:
+            continue
+        return python_module_available("langchain_mcp_adapters")
+    missing_tool("langchain-mcp-adapters")
+    return False
+
+
+def run_socket_mcp_dependency_scan(directories):
+    print(f"SOCKET_MCP_BEGIN {repo_path}", flush=True)
+    packages = []
+    seen = set()
+    for directory in sorted(directories, key=lambda item: (len(item.relative_to(repo_path).parts), str(item))):
+        for package in socket_mcp_packages(directory):
+            key = (package["ecosystem"], package["depname"], package["version"])
+            if key in seen:
+                continue
+            seen.add(key)
+            packages.append(package)
+
+    print(f"SOCKET_MCP_PACKAGE_COUNT {len(packages)}", flush=True)
+    if not packages:
+        print(f"SOCKET_MCP_NO_DEPENDENCIES {repo_path}", flush=True)
+        print(f"SOCKET_MCP_END {repo_path} 0", flush=True)
+        return 0
+
+    token = socket_api_token()
+    if not token:
+        print("ENV_HINT SOCKET_API_KEY", flush=True)
+        print("SOCKET_MCP_AUTH_MISSING", flush=True)
+        print(f"SOCKET_MCP_END {repo_path} 1", flush=True)
+        return 1
+
+    if not ensure_socket_mcp_runtime(repo_path):
+        print(f"SOCKET_MCP_END {repo_path} 1", flush=True)
+        return 1
+
+    env = os.environ.copy()
+    env["SOCKET_API_TOKEN"] = token
+    try:
+        result = subprocess.run(
+            ["python3", "-c", SOCKET_MCP_CLIENT_CODE],
+            cwd=repo_path,
+            input=json.dumps(packages[:200]),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=180,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if exc.stdout:
+            print(exc.stdout, end="", flush=True)
+        if exc.stderr:
+            print(exc.stderr, end="", flush=True)
+        print("SOCKET_MCP_TIMEOUT 180", flush=True)
+        print(f"SOCKET_MCP_END {repo_path} 124", flush=True)
+        return 124
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    if result.stderr:
+        print(result.stderr, end="", flush=True)
+    print(f"SOCKET_MCP_END {repo_path} {result.returncode}", flush=True)
+    return result.returncode

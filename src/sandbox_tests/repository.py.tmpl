@@ -1,0 +1,100 @@
+def ignored(path):
+    return any(
+        part in {".git", "node_modules", ".venv", "venv", "dist", "build", "target", "vendor"}
+        for part in path.parts
+    )
+
+
+def read_text_safely(path, max_bytes=1_000_000):
+    try:
+        if path.stat().st_size > max_bytes:
+            return None
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+
+
+def file_inventory(directory, limit=5000):
+    files = []
+    total = 0
+    for path in sorted(directory.rglob("*")):
+        rel = path.relative_to(directory)
+        if ignored(rel) or not path.is_file():
+            continue
+        total += 1
+        if len(files) >= limit:
+            continue
+        files.append(str(rel))
+    return {"total": total, "shown": files, "truncated": total > len(files)}
+
+def requirement_files(directory):
+    return sorted(
+        path
+        for path in directory.glob("*.txt")
+        if path.name.startswith(("requirement", "requirements"))
+    )
+
+
+def is_dependency_manifest(path, repo_root, manifest_names):
+    rel = path.relative_to(repo_root)
+    if path.name in manifest_names:
+        return True
+
+    if (
+        not path.name.startswith(("requirement", "requirements"))
+        or path.suffix != ".txt"
+    ):
+        return False
+
+    non_project_dirs = {
+        "doc",
+        "docs",
+        "example",
+        "examples",
+        "fixture",
+        "fixtures",
+        "sample",
+        "samples",
+        "test",
+        "tests",
+    }
+    if any(part.lower() in non_project_dirs for part in rel.parts[:-1]):
+        return False
+
+    return True
+
+
+def package_json(directory):
+    try:
+        package = json.loads((directory / "package.json").read_text())
+    except Exception:
+        return {}
+    return package if isinstance(package, dict) else {}
+
+
+def pyproject_data(directory):
+    if tomllib is None:
+        return {}
+    try:
+        return tomllib.loads((directory / "pyproject.toml").read_text())
+    except Exception:
+        return {}
+
+manifest_names = {
+    "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+    "pyproject.toml", "uv.lock", "Pipfile", "poetry.lock", "environment.yml",
+    "go.mod", "Cargo.toml", "Gemfile", "composer.json",
+}
+
+
+def collect_manifests(directory):
+    found_manifests = []
+    found_install_dirs = set()
+    for path in directory.rglob("*"):
+        rel = path.relative_to(directory)
+        if ignored(rel) or not path.is_file():
+            continue
+        if is_dependency_manifest(path, directory, manifest_names):
+            found_manifests.append(str(rel))
+            found_install_dirs.add(path.parent)
+    return found_manifests, found_install_dirs

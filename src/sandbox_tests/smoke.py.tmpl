@@ -1,0 +1,147 @@
+def python_module_candidates(directory):
+    data = pyproject_data(directory)
+    names = []
+
+    flit_module = data.get("tool", {}).get("flit", {}).get("module", {}).get("name")
+    if isinstance(flit_module, str):
+        names.append(flit_module)
+
+    project_name = data.get("project", {}).get("name")
+    if isinstance(project_name, str):
+        names.append(project_name.replace("-", "_"))
+
+    src = directory / "src"
+    if src.exists():
+        for child in sorted(src.iterdir()):
+            if child.is_dir() and (child / "__init__.py").exists():
+                names.append(child.name)
+
+    for child in sorted(directory.iterdir()):
+        if child.is_dir() and (child / "__init__.py").exists() and child.name not in {"tests", "docs"}:
+            names.append(child.name)
+
+    deduped = []
+    for name in names:
+        if name.isidentifier() and name not in deduped:
+            deduped.append(name)
+    return deduped
+
+
+def candidate_python_files(directory):
+    preferred_names = {
+        "main.py",
+        "app.py",
+        "server.py",
+        "run.py",
+        "cli.py",
+        "manage.py",
+        "__main__.py",
+    }
+    candidates = []
+    for path in sorted(directory.rglob("*.py")):
+        rel = path.relative_to(directory)
+        if ignored(rel):
+            continue
+        text = read_text_safely(path, max_bytes=500_000) or ""
+        score = 0
+        if path.name in preferred_names:
+            score += 100
+        if "if __name__" in text and "__main__" in text:
+            score += 80
+        if any(token in text for token in ["FastAPI(", "Flask(", "click.group", "typer.Typer", "argparse.ArgumentParser"]):
+            score += 20
+        if score == 0:
+            continue
+        candidates.append((score, len(rel.parts), str(rel), path))
+
+    return [item[3] for item in sorted(candidates, key=lambda item: (-item[0], item[1], item[2]))[:8]]
+
+
+def print_discovery(directory):
+    print(f"DISCOVERY_LS_BEGIN {directory}", flush=True)
+    try:
+        for child in sorted(directory.iterdir()):
+            print(child.name, flush=True)
+    except Exception as exc:
+        print(f"DISCOVERY_LS_ERROR {type(exc).__name__}: {exc}", flush=True)
+    print("DISCOVERY_LS_END", flush=True)
+
+    for path in candidate_python_files(directory):
+        print(f"RUN_CANDIDATE python {path.relative_to(directory)}", flush=True)
+
+    package = package_json(directory)
+    scripts = package.get("scripts") if isinstance(package.get("scripts"), dict) else {}
+    for name, command in sorted(scripts.items()):
+        if name in {"start", "dev", "serve", "preview", "build"}:
+            print(f"RUN_CANDIDATE npm-script {name}: {command}", flush=True)
+
+
+def python_runner(directory):
+    uv = uv_command(directory)
+    if uv and ((directory / "uv.lock").exists() or (directory / "pyproject.toml").exists()):
+        return uv + ["run", "python"]
+    if (directory / "poetry.lock").exists() and has("poetry"):
+        return ["poetry", "run", "python"]
+    if (directory / ".venv/bin/python").exists():
+        return [".venv/bin/python"]
+    if ensure_python_runtime(directory):
+        return ["python3"]
+    return None
+
+
+def smoke_commands(directory):
+    commands = []
+    print_discovery(directory)
+    if startup_command:
+        commands.append((["sh", "-lc", startup_command], 30, True))
+    commands.extend(readme_smoke_commands(directory))
+
+    package = package_json(directory)
+    scripts = package.get("scripts") if isinstance(package.get("scripts"), dict) else {}
+
+    if (directory / "package.json").exists():
+        manager = None
+        if (directory / "pnpm-lock.yaml").exists():
+            manager = "pnpm"
+        elif (directory / "yarn.lock").exists():
+            manager = "yarn"
+        elif (directory / "bun.lockb").exists() or (directory / "bun.lock").exists():
+            manager = "bun"
+        else:
+            manager = "npm"
+
+        if not ensure_node_manager(manager, directory):
+            missing_tool(manager)
+        else:
+            for script_name in ["build", "start", "dev", "serve", "preview"]:
+                if script_name not in scripts:
+                    continue
+                if manager == "yarn":
+                    command = ["yarn", script_name]
+                elif manager == "npm" and script_name == "start":
+                    command = ["npm", "start"]
+                else:
+                    command = [manager, "run", script_name]
+                commands.append((command, 900 if script_name == "build" else 30, script_name != "build"))
+
+    runner = python_runner(directory)
+    if runner:
+        for module in python_module_candidates(directory):
+            commands.append(
+                (
+                    runner + ["-c", f"import {module}; print('SMOKE_IMPORT_OK {module}')"],
+                    60,
+                    False,
+                )
+            )
+            break
+
+        for path in candidate_python_files(directory):
+            commands.append((runner + [str(path.relative_to(directory))], 30, True))
+
+    if (directory / "go.mod").exists() and ensure_go_runtime(directory):
+        commands.append((["go", "run", "."], 30, True))
+    if (directory / "Cargo.toml").exists() and ensure_rust_runtime(directory):
+        commands.append((["cargo", "run"], 30, True))
+
+    return commands

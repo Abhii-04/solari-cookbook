@@ -14,7 +14,4 @@ class State(TypedDict, total=False):
     next: Annotated[Any, latest_value]
     user_id: str
     task_instructions: str
-    feedback_on_work: str
-    internet_skill: str
-    linkedin_skill: str
     setup_logs: Annotated[list[str], add]

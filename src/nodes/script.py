@@ -2,7 +2,24 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
-SANDBOX_SETUP_TEMPLATE = Path(__file__).with_name("setup_script.py.tmpl")
+SANDBOX_TESTS_DIR = Path(__file__).parents[1] / "sandbox_tests"
+SANDBOX_TEST_FRAGMENTS = (
+    "core.py.tmpl",
+    "repository.py.tmpl",
+    "security.py.tmpl",
+    "discovery.py.tmpl",
+    "smoke.py.tmpl",
+    "test_checks.py.tmpl",
+    "socket_mcp.py.tmpl",
+    "main_flow.py.tmpl",
+)
+
+
+def _sandbox_setup_template_text() -> str:
+    return "\n\n".join(
+        (SANDBOX_TESTS_DIR / filename).read_text().rstrip()
+        for filename in SANDBOX_TEST_FRAGMENTS
+    ) + "\n"
 
 
 def sandbox_setup_script(
@@ -10,12 +27,14 @@ def sandbox_setup_script(
     repo_name: str,
     env_overrides: dict[str, str] | None = None,
     startup_command: str | None = None,
+    socket_api_token: str | None = None,
 ) -> str:
-    return Template(SANDBOX_SETUP_TEMPLATE.read_text()).substitute(
+    return Template(_sandbox_setup_template_text()).substitute(
         repo_url_literal=repr(repo_url),
         repo_name_literal=repr(repo_name),
         env_overrides_literal=repr(env_overrides or {}),
         startup_command_literal=repr(startup_command),
+        socket_api_token_literal=repr(socket_api_token),
     )
 
 

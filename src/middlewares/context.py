@@ -28,6 +28,7 @@ def _status_lines(text: str) -> list[str]:
     prefixes = (
         "REPO_",
         "SECURITY_SCAN_END",
+        "SOCKET_MCP_",
         "MANIFESTS_FOUND_BEGIN",
         "MANIFESTS_FOUND_END",
         "INSTALL_BEGIN",

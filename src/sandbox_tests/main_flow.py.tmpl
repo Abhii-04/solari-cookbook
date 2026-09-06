@@ -1,0 +1,181 @@
+overall_status = 0
+if repo_path.exists():
+    if (repo_path / ".git").exists():
+        print(f"Target repository already exists in sandbox: {repo_path}", flush=True)
+    else:
+        print(f"Target folder already exists but is not a Git repository: {repo_path}", flush=True)
+        overall_status = 1
+else:
+    clone_status = run(["git", "clone", "--", repo_url, str(repo_path)], workspace)
+    if clone_status != 0:
+        overall_status = clone_status
+
+manifests = []
+install_dirs = set()
+if overall_status == 0:
+    manifests, install_dirs = collect_manifests(repo_path)
+
+for key in env_hints(repo_path):
+    print(f"ENV_HINT {key}", flush=True)
+
+print("MANIFESTS_FOUND_BEGIN")
+for manifest in sorted(manifests):
+    print(manifest)
+print("MANIFESTS_FOUND_END")
+
+if overall_status == 0:
+    print_repo_profile(repo_path, manifests)
+
+security_status = 1
+if overall_status == 0:
+    print(f"SECURITY_SCAN_BEGIN {repo_path}", flush=True)
+    findings = security_findings(repo_path)
+    print("SECURITY_FINDINGS_BEGIN", flush=True)
+    for finding in findings:
+        print(f"SECURITY_FINDING {finding}", flush=True)
+    print("SECURITY_FINDINGS_END", flush=True)
+    security_status = 1 if findings else 0
+    print(f"SECURITY_SCAN_END {repo_path} {security_status}", flush=True)
+    if security_status != 0:
+        overall_status = 1
+
+print(f"REPO_SECURITY_STATUS {security_status}", flush=True)
+
+socket_mcp_status = 1
+if overall_status == 0:
+    socket_scan_dirs = install_dirs or {repo_path}
+    socket_mcp_status = run_socket_mcp_dependency_scan(socket_scan_dirs)
+    if socket_mcp_status != 0:
+        overall_status = 1
+
+print(f"REPO_SOCKET_MCP_STATUS {socket_mcp_status}", flush=True)
+
+if overall_status == 0:
+    for directory in sorted(install_dirs, key=lambda item: (len(item.relative_to(repo_path).parts), str(item))):
+        print(f"INSTALL_BEGIN {directory}", flush=True)
+        status = 0
+
+        if (directory / "package.json").exists():
+            if (directory / "pnpm-lock.yaml").exists() and ensure_node_manager("pnpm", directory):
+                status |= run(["pnpm", "install"], directory)
+            elif (directory / "pnpm-lock.yaml").exists():
+                missing_tool("pnpm")
+                status = 1
+            elif (directory / "yarn.lock").exists() and ensure_node_manager("yarn", directory):
+                status |= run(["yarn", "install"], directory)
+            elif (directory / "yarn.lock").exists():
+                missing_tool("yarn")
+                status = 1
+            elif ((directory / "bun.lockb").exists() or (directory / "bun.lock").exists()) and has("bun"):
+                status |= run(["bun", "install"], directory)
+            elif (directory / "bun.lockb").exists() or (directory / "bun.lock").exists():
+                missing_tool("bun")
+                status = 1
+            elif (directory / "package-lock.json").exists() and has("npm"):
+                status |= run(["npm", "ci"], directory)
+            elif ensure_node_runtime(directory):
+                status |= run(["npm", "install"], directory)
+            else:
+                missing_tool("npm")
+                print("SKIP node install: no supported package manager found")
+                status = 1
+
+        if (directory / "uv.lock").exists():
+            uv = uv_command(directory)
+            if uv:
+                status |= run(uv + ["sync"], directory)
+            else:
+                print("SKIP uv install: uv could not be found or bootstrapped")
+                status = 1
+        elif (directory / "poetry.lock").exists() and (directory / "pyproject.toml").exists() and has("poetry"):
+            status |= run(["poetry", "install"], directory)
+        elif requirement_files(directory):
+            if has("uv") or ensure_python_runtime(directory):
+                status |= create_python_venv(directory)
+                if status == 0:
+                    for requirements_file in requirement_files(directory):
+                        status |= install_requirement_file(directory, requirements_file)
+            else:
+                print("SKIP python requirements install: no supported Python installer found")
+                status = 1
+        elif (directory / "pyproject.toml").exists():
+            uv = uv_command(directory)
+            if uv:
+                status |= run(uv + ["sync"], directory)
+            else:
+                print("SKIP pyproject install: uv could not be found or bootstrapped")
+                status = 1
+        elif (directory / "Pipfile").exists() and has("pipenv"):
+            status |= run(["pipenv", "install"], directory)
+        elif (directory / "environment.yml").exists() and has("conda"):
+            status |= run(["conda", "env", "update", "-f", "environment.yml"], directory)
+
+        if (directory / "go.mod").exists():
+            if ensure_go_runtime(directory):
+                status |= run(["go", "mod", "download"], directory)
+            else:
+                status = 1
+        if (directory / "Cargo.toml").exists():
+            if ensure_rust_runtime(directory):
+                status |= run(["cargo", "fetch"], directory)
+            else:
+                status = 1
+        if (directory / "Gemfile").exists():
+            if ensure_ruby_runtime(directory):
+                status |= run(["bundle", "install"], directory)
+            else:
+                status = 1
+        if (directory / "composer.json").exists():
+            if ensure_php_composer(directory):
+                status |= run(["composer", "install"], directory)
+            else:
+                status = 1
+
+        print(f"INSTALL_END {directory} {status}", flush=True)
+        if status != 0:
+            overall_status = 1
+
+smoke_status = 1
+smoke_commands_ran = 0
+if overall_status == 0:
+    if not install_dirs:
+        install_dirs.add(repo_path)
+    smoke_status = 0
+    smoke_env = os.environ.copy()
+    smoke_env.update(env_overrides)
+    for directory in sorted(install_dirs, key=lambda item: (len(item.relative_to(repo_path).parts), str(item))):
+        commands = smoke_commands(directory)
+        if not commands:
+            continue
+        print(f"SMOKE_BEGIN {directory}", flush=True)
+        directory_status = 1
+        for command, timeout, timeout_ok in commands:
+            smoke_commands_ran += 1
+            command_status = run_logged("SMOKE", command, directory, timeout=timeout, timeout_ok=timeout_ok, env=smoke_env)
+            if command_status == 0:
+                directory_status = 0
+                break
+        smoke_status |= directory_status
+        print(f"SMOKE_END {directory} {directory_status}", flush=True)
+
+    if smoke_commands_ran == 0:
+        print("NO_SMOKE_COMMAND_FOUND", flush=True)
+        smoke_status = 1
+
+if smoke_status != 0:
+    overall_status = 1
+
+print(f"REPO_SMOKE_STATUS {smoke_status}", flush=True)
+
+test_status = 0
+if overall_status == 0:
+    if not install_dirs:
+        install_dirs.add(repo_path)
+    for directory in sorted(install_dirs, key=lambda item: (len(item.relative_to(repo_path).parts), str(item))):
+        test_status |= run_generic_test_checks(directory)
+
+if test_status != 0:
+    overall_status = 1
+
+print(f"REPO_TEST_STATUS {test_status}", flush=True)
+print(f"REPO_SETUP_STATUS {overall_status}", flush=True)
