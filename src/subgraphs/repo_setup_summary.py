@@ -82,20 +82,20 @@ def next_steps_message(
     start_command: str | None,
     control_url: str | None = None,
 ) -> str:
-    parts = ["Next steps:"]
+    parts = ["**Next Steps**"]
     if local_path:
         quoted_path = shlex.quote(local_path)
-        parts.extend([f"Open the project: cd {quoted_path}", f"Open it in VS Code: code {quoted_path}"])
+        parts.extend([f"- Open the project: `cd {quoted_path}`", f"- Open it in VS Code: `code {quoted_path}`"])
     if start_command:
-        parts.append(f"Start command: {start_command}")
-        parts.append("Then open the local URL printed by the command in your browser.")
+        parts.append(f"- Start command: `{start_command}`")
+        parts.append("- Open the local URL printed by the command in your browser.")
     else:
         parts.append(
-            "Start command: Not detected automatically. "
+            "- Start command: not detected automatically. "
             "Check the README or manifest scripts in the local project folder."
         )
     if control_url:
-        parts.append(f"Sandbox console: {control_url}")
+        parts.append(f"- Sandbox console: {control_url}")
     return "\n".join(parts)
 
 
@@ -169,28 +169,49 @@ def _failed_setup_message(
     test_failure = sandbox_test_failure_summary(sandbox_output)
     error = payload.get("error") or local_install.get("error") or sandbox_install.get("error")
     parts = [
-        f"Setup could not complete for {repo_name}.",
-        f"Sandbox ID: {sandbox.get('sandbox_id')}",
-        f"Sandbox path: {payload.get('sandbox_repo_path')}",
-        f"Local path: {local_install.get('repo_path')}",
+        f"**{repo_name} Setup Report**",
+        "",
+        "**Result**",
+        "- Status: `[BLOCKED] Sandbox gate did not pass`",
+        "- Local install: `skipped`",
+        "",
+        "**Sandbox**",
+        f"- Sandbox ID: `{sandbox.get('sandbox_id')}`",
+        f"- Sandbox path: `{payload.get('sandbox_repo_path')}`",
     ]
     if socket_failure:
-        parts.append(f"Last failure: {socket_failure}.")
+        parts.extend(["", "**Blocking Failure**", f"- Socket MCP scan: {socket_failure}."])
     elif install_failure:
-        parts.append(f"Last failure: {install_failure}.")
+        parts.extend(["", "**Blocking Failure**", f"- Dependency install: {install_failure}."])
     elif test_failure:
-        parts.append(f"Last failure: {test_failure}.")
+        parts.extend(["", "**Blocking Failure**", f"- Test-file checks: {test_failure}."])
     elif error:
-        parts.append(f"Last failure: {error}.")
+        parts.extend(["", "**Blocking Failure**", f"- Error: {error}."])
     else:
-        parts.append("The setup tool returned a failed result without a recovery question.")
-    parts.append("I stopped instead of retrying the same setup step again.")
+        parts.extend(
+            [
+                "",
+                "**Blocking Failure**",
+                "- The setup tool returned a failed result without a recovery question.",
+            ]
+        )
+
+    parts.extend(["", "**Gate Evidence**", *_sandbox_gate_lines(sandbox_output)])
     if manifests:
-        parts.append(f"Manifests found: {', '.join(str(item) for item in manifests)}.")
+        parts.append(f"- Manifests: {_inline_list(manifests)}")
     if candidates:
-        parts.append(f"Startup command found from docs: {candidates[0]}.")
-    parts.append(next_steps)
-    return "\n".join(part for part in parts if part and not part.endswith("None"))
+        parts.append(f"- Startup command from docs: `{candidates[0]}`")
+    parts.extend(
+        [
+            "",
+            "**Local Setup**",
+            f"- Local path: `{local_install.get('repo_path')}`",
+            "- Action taken: stopped instead of retrying the same setup step again.",
+            "",
+            next_steps,
+        ]
+    )
+    return _render_parts(parts)
 
 
 def _successful_setup_message(
@@ -204,24 +225,98 @@ def _successful_setup_message(
     entrypoints: dict[str, Any],
     next_steps: str,
 ) -> str:
-    parts = [
-        f"Setup complete for {repo_name}.",
-        f"Sandbox ID: {sandbox.get('sandbox_id')}",
-        f"Sandbox path: {payload.get('sandbox_repo_path')}",
-        f"Local path: {local_install.get('repo_path')}",
-        "Security scan, Socket MCP dependency scan, dependency install, and smoke run passed.",
-    ]
     sandbox_output = sandbox_output_text(sandbox_install)
-    if "NO_TEST_DIRECTORY " in sandbox_output:
-        parts.append("No tests directory was found in the sandbox.")
-    else:
-        parts.append("Sandbox tests passed.")
+    parts = [
+        f"**{repo_name} Setup Report**",
+        "",
+        "**Result**",
+        "- Status: `[PASS] Sandbox verified and local setup completed`",
+        "- Safety model: unknown repo was checked in Solari before touching the local machine.",
+        "",
+        "**Sandbox Gate**",
+        *_sandbox_gate_lines(sandbox_output),
+        "",
+        "**Sandbox**",
+        f"- Sandbox ID: `{sandbox.get('sandbox_id')}`",
+        f"- Sandbox path: `{payload.get('sandbox_repo_path')}`",
+    ]
     if manifests:
-        parts.append(f"Manifests found: {', '.join(str(item) for item in manifests)}.")
+        parts.append(f"- Manifests: {_inline_list(manifests)}")
     if candidates:
-        parts.append(f"Startup command found from docs: {candidates[0]}.")
+        parts.append(f"- Startup command from docs: `{candidates[0]}`")
     python_entrypoints = entrypoints.get("python") if isinstance(entrypoints, dict) else None
     if python_entrypoints:
-        parts.append(f"Entrypoints found: {', '.join(str(item) for item in python_entrypoints[:3])}.")
-    parts.append(next_steps)
-    return "\n".join(part for part in parts if part and not part.endswith("None"))
+        parts.append(f"- Python entrypoints: {_inline_list(python_entrypoints[:3])}")
+    parts.extend(
+        [
+            "",
+            "**Local Setup**",
+            f"- Local path: `{local_install.get('repo_path')}`",
+            "- Dependencies: installed after sandbox approval.",
+            "",
+            "**Why This Is Presentable**",
+            "- Clear safety boundary: sandbox first, local machine second.",
+            "- Reproducible proof: every gate has a machine-readable status line.",
+            "- Actionable output: includes project path and detected start command.",
+            "",
+            next_steps,
+        ]
+    )
+    return _render_parts(parts)
+
+
+def _sandbox_gate_lines(sandbox_output: str) -> list[str]:
+    test_line = (
+        "- Test-file checks: `[SKIPPED] no tests directory found`"
+        if "NO_TEST_DIRECTORY " in sandbox_output
+        else f"- Test-file checks: `{_gate_label(sandbox_output, 'REPO_TEST_STATUS')}`"
+    )
+    return [
+        f"- Static security scan: `{_gate_label(sandbox_output, 'REPO_SECURITY_STATUS')}`",
+        f"- Socket MCP dependency scan: `{_gate_label(sandbox_output, 'REPO_SOCKET_MCP_STATUS')}`",
+        f"- Smoke run: `{_gate_label(sandbox_output, 'REPO_SMOKE_STATUS')}`",
+        test_line,
+        f"- Overall setup gate: `{_gate_label(sandbox_output, 'REPO_SETUP_STATUS')}`",
+    ]
+
+
+def _gate_label(sandbox_output: str, status_name: str) -> str:
+    prefix = f"{status_name} "
+    for line in reversed(sandbox_output.splitlines()):
+        if not line.startswith(prefix):
+            continue
+        status = line.removeprefix(prefix).strip()
+        if status == "0":
+            return "PASS"
+        return f"FAIL ({status})"
+    return "UNKNOWN"
+
+
+def _inline_list(values: list[Any], limit: int = 8) -> str:
+    items = [f"`{value}`" for value in values[:limit]]
+    if len(values) > limit:
+        items.append(f"...and {len(values) - limit} more")
+    return ", ".join(items)
+
+
+def _render_parts(parts: list[str]) -> str:
+    visible_parts = []
+    previous_blank = False
+    for part in parts:
+        if _is_empty_optional_line(part):
+            continue
+        is_blank = part == ""
+        if is_blank and previous_blank:
+            continue
+        visible_parts.append(part)
+        previous_blank = is_blank
+    return "\n".join(visible_parts).strip()
+
+
+def _is_empty_optional_line(part: str) -> bool:
+    return (
+        part.endswith("None")
+        or part.endswith("`None`")
+        or part.endswith(": None")
+        or part.endswith(": `None`")
+    )
