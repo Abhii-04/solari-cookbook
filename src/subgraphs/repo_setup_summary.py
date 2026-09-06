@@ -254,11 +254,6 @@ def _successful_setup_message(
             f"- Local path: `{local_install.get('repo_path')}`",
             "- Dependencies: installed after sandbox approval.",
             "",
-            "**Why This Is Presentable**",
-            "- Clear safety boundary: sandbox first, local machine second.",
-            "- Reproducible proof: every gate has a machine-readable status line.",
-            "- Actionable output: includes project path and detected start command.",
-            "",
             next_steps,
         ]
     )
