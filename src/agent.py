@@ -12,6 +12,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
 from src.config.state import State
+from src.cli_ui import GitReadyUI
 from src.middlewares.repository_setup_logs import repo_setup_terminal_log
 from src.middlewares.dynamic_agent_selector import dynamic_agent_router, dynamic_router
 from src.middlewares.handle_tool_error import handle_tool_error
@@ -29,7 +30,8 @@ llm = ChatOpenAI(
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, ui: GitReadyUI | None = None):
+        self.ui = ui or GitReadyUI()
         self.assistant_graph = None
         self.graph = None
         self.agent_id = None
@@ -73,7 +75,6 @@ class Agent:
         system_message = SystemMessage(
             content="""
             You are the orchestrator. Call transfer_to_assistant with concise task instructions and any relevant context from the conversation.
-            The Gmail, LinkedIn, and internet agents are not available in this repo.
             Transfer Solari sandbox, sandbox creation/session/environment/runtime, isolated code execution, dev container, ephemeral compute, or sandbox setup tasks to assistant.
             Transfer general reasoning, writing, editing, planning, summaries, and context-only help to assistant.
             When unsure, transfer to assistant.
@@ -147,9 +148,12 @@ class Agent:
     async def close(self):
         pass
 
+
+    #This should be directly inside run_superstep with config = configurable syntax
     def _thread_config(self) -> dict[str, Any]:
         return {"configurable": {"thread_id": self.agent_id or "default"}}
 
+    #Used after HITL interrupt
     def _resume_value(self, message: str) -> dict[str, Any] | str:
         normalized = message.strip().lower()
         if normalized in {"approve", "approved", "yes", "y", "allow", "ok", "okay"}:
@@ -201,23 +205,23 @@ class Agent:
     def _print_result(self, result: dict[str, Any], pending_question: str | None = None) -> None:
         setup_logs = result.get("setup_logs", []) or []
         for setup_log in setup_logs[self.printed_setup_log_count:]:
-            print(setup_log)
+            self.ui.log(setup_log)
         self.printed_setup_log_count = len(setup_logs)
 
         sandbox_log = repo_setup_terminal_log(result.get("messages", []))
         if sandbox_log:
-            print(sandbox_log)
+            self.ui.log(sandbox_log)
 
         question = self._interrupt_question(result) or pending_question
         if question:
             self.pending_interrupt = True
-            print(f"Agent needs input: {question}")
+            self.ui.interrupt(question)
             return
 
         self.pending_interrupt = False
         messages = result.get("messages", [])
         if messages:
-            print(messages[-1].content)
+            self.ui.response(messages[-1].content)
 
     def _print_progress(self, event: Any) -> None:
         if not isinstance(event, dict):
@@ -239,8 +243,7 @@ class Agent:
         if event.get("local_path"):
             details.append(str(event["local_path"]))
 
-        suffix = f" ({', '.join(details)})" if details else ""
-        print(f"[repo-setup] {message}{suffix}")
+        self.ui.progress(str(message), details)
 
     async def _run_graph(self, graph_input: Any, config: dict[str, Any]) -> dict[str, Any]:
         if not hasattr(self.graph, "astream"):
@@ -277,18 +280,20 @@ class Agent:
         pending_question = await self._pending_interrupt_question(config)
 
         if self.pending_interrupt or pending_question:
-            print("[agent] Resuming paused workflow")
-            result = await self._run_graph(
-                Command(resume=self._resume_value(message)),
-                config=config,
-            )
+            self.ui.lifecycle("resuming paused workflow")
+            with self.ui.status("Restoring graph checkpoint"):
+                result = await self._run_graph(
+                    Command(resume=self._resume_value(message)),
+                    config=config,
+                )
         else:
-            print("[agent] Starting request")
+            self.ui.lifecycle("starting request")
             state = {
                 "messages": [HumanMessage(content=message)],
                 "user_id": user_id,
             }
-            result = await self._run_graph(state, config=config)
+            with self.ui.status("Routing request through GitReady"):
+                result = await self._run_graph(state, config=config)
 
         pending_question = await self._pending_interrupt_question(config)
         self._print_result(result, pending_question=pending_question)

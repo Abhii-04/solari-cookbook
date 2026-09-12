@@ -3,6 +3,11 @@ from string import Template
 from typing import Any
 
 SANDBOX_TESTS_DIR = Path(__file__).parents[1] / "sandbox_tests"
+
+#If you want to add custom tests then just write them in sandbox_tests
+#In the same format as other files and include them here
+#But order matters cause they are combined to form a big single script so it should be in 
+# a proper order else it might fail or produce an error
 SANDBOX_TEST_FRAGMENTS = (
     "core.py.tmpl",
     "repository.py.tmpl",

@@ -3,7 +3,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from src.nodes.local import (
+from src.nodes.local_setup import (
     clone_repo_and_install_dependencies,
     is_supported_git_url,
     repo_name_from_url,
@@ -72,6 +72,8 @@ async def create_sandbox_clone_repo_and_install(
         sandbox_id=sandbox_id,
         control_url=sandbox_result.get("control_url"),
     )
+    #-------------------------------------------------------
+    #I could break this 20 LOC into 4LOC
     socket_api_token = None
     if env_overrides and any(env_overrides.get(key) for key in SOCKET_TOKEN_ENV_KEYS):
         socket_api_token = next(
@@ -90,12 +92,13 @@ async def create_sandbox_clone_repo_and_install(
         for key, value in (env_overrides or {}).items()
         if key not in SOCKET_TOKEN_ENV_KEYS
     }
+    #------------------------------------------------------
     try:
         sandbox_install = await await_with_progress(
             SolariSandboxClient().run_code(
                 sandbox_id=sandbox_id,
-                code=sandbox_setup_script(
-                    repo_url,
+                code=sandbox_setup_script(      #All test scripts from sandbox_tests 
+                    repo_url,                   #are run on this step
                     repo_name,
                     env_overrides=repo_env_overrides,
                     startup_command=startup_command,

@@ -7,7 +7,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CLONE_ROOT = PROJECT_ROOT.parent
 DOC_FILE_NAMES = [
     "README.md",
@@ -21,6 +21,7 @@ DOC_FILE_NAMES = [
 
 
 def repo_name_from_url(repo_url: str) -> str:
+    """ extracts a safe local folder name from a github repo url"""
     name = repo_url.rstrip("/").rsplit("/", 1)[-1]
     if name.endswith(".git"):
         name = name[:-4]
@@ -71,6 +72,7 @@ def _run(command: list[str], cwd: Path, timeout: int = 900) -> dict[str, Any]:
 
 
 def _run_shell(command: str, cwd: Path, timeout: int = 900) -> dict[str, Any]:
+    """run command as per model requested on local machine"""
     try:
         result = subprocess.run(
             command,
@@ -98,10 +100,12 @@ def _run_shell(command: str, cwd: Path, timeout: int = 900) -> dict[str, Any]:
 
 
 def _has(command: str) -> bool:
+    """checks if a command/program exist in the machine or systems PATH."""
     return shutil.which(command) is not None
 
 
 def _missing_tools_from_results(results: list[dict[str, Any]]) -> list[str]:
+    """scan command results for command not found errors"""
     missing = set()
     for result in results:
         if result.get("returncode") != 127:
@@ -114,12 +118,14 @@ def _missing_tools_from_results(results: list[dict[str, Any]]) -> list[str]:
 
 
 def _append_result(results: list[dict[str, Any]], command: list[str], cwd: Path) -> None:
-    result = _run(command, cwd)
+    """Runs a command and seperate its reults with cwd."""
+    result = _run(command, cwd) #uses run function to run a command locally
     result["cwd"] = str(cwd)
     results.append(result)
 
 
 def _python_venv_candidates() -> list[str]:
+    """Finds available python to create virtual environments."""
     candidates = []
     for command in ["python3.11", "python3.10", "python3.12", "python3"]:
         if _has(command):
@@ -128,6 +134,7 @@ def _python_venv_candidates() -> list[str]:
 
 
 def _create_python_venv(project_path: Path, results: list[dict[str, Any]]) -> bool:
+    """creates .venv using uv or python -m venv ."""
     if (project_path / ".venv" / "bin" / "python").exists():
         return True
 
@@ -143,6 +150,8 @@ def _create_python_venv(project_path: Path, results: list[dict[str, Any]]) -> bo
     commands.extend([[interpreter, "-m", "venv", ".venv"] for interpreter in interpreters])
 
     attempt_indexes = []
+
+    #Command in run using subprocess and _run function
     for command in commands:
         result = _run(command, project_path)
         result["cwd"] = str(project_path)
@@ -159,6 +168,7 @@ def _create_python_venv(project_path: Path, results: list[dict[str, Any]]) -> bo
 
 
 def _is_ignored_path(path: Path) -> bool:
+    """these directories are filtered out ."""
     ignored_parts = {
         ".git",
         ".hg",
@@ -190,10 +200,12 @@ def _read_text_safely(path: Path, max_chars: int = 20_000) -> dict[str, Any]:
 
 
 def _doc_files(repo_path: Path) -> list[Path]:
+    """finds common documentation files."""
     return [repo_path / name for name in DOC_FILE_NAMES if (repo_path / name).is_file()]
 
 
 def _file_inventory(repo_path: Path, limit: int = 5000) -> dict[str, Any]:
+    """builds a bounded list of repo files."""
     files = []
     total = 0
     for path in sorted(repo_path.rglob("*")):
@@ -207,6 +219,7 @@ def _file_inventory(repo_path: Path, limit: int = 5000) -> dict[str, Any]:
 
 
 def _package_scripts(repo_path: Path) -> dict[str, Any]:
+    """reads package.json scripts."""
     path = repo_path / "package.json"
     if not path.is_file():
         return {}
@@ -219,6 +232,7 @@ def _package_scripts(repo_path: Path) -> dict[str, Any]:
 
 
 def _python_entrypoints(repo_path: Path) -> list[str]:
+    """finds likely Python entry files like main.py, app.py, manage.py."""
     preferred_names = {"main.py", "app.py", "server.py", "run.py", "cli.py", "manage.py", "__main__.py"}
     entrypoints = []
     for path in sorted(repo_path.rglob("*.py")):
@@ -270,7 +284,7 @@ def _is_dependency_manifest(
 
     return True
 
-
+#Python dependencies installation part-----------------------------------------------------------
 def _requirement_files(project_path: Path) -> list[Path]:
     return sorted(
         path
@@ -338,6 +352,7 @@ def _install_python_dependencies(project_path: Path, results: list[dict[str, Any
             project_path,
         )
 
+#Node dependencies installation part------------------------------------------------------------
 
 def _install_node_dependencies(project_path: Path, results: list[dict[str, Any]]) -> None:
     if not (project_path / "package.json").exists():
@@ -454,7 +469,7 @@ def install_missing_setup_tools(tool_names: list[str], user_approved: bool = Fal
         "results": results,
     }
 
-
+#Install other language dependencies---------------------------------------------------------
 def _install_other_dependencies(project_path: Path, results: list[dict[str, Any]]) -> None:
     if (project_path / "go.mod").exists():
         _append_result(results, ["go", "mod", "download"], project_path)

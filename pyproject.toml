@@ -16,6 +16,7 @@ dependencies = [
     "langgraph>=1.2.10",
     "langgraph-supervisor>=0.0.31",
     "mem0ai>=2.0.20",
+    "rich>=15.0.0",
     "solari-sandbox>=0.2.0",
     "tavily>=1.1.0",
 ]

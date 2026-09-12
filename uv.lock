@@ -3148,6 +3148,7 @@ dependencies = [
     { name = "langgraph" },
     { name = "langgraph-supervisor" },
     { name = "mem0ai" },
+    { name = "rich" },
     { name = "solari-sandbox" },
     { name = "tavily" },
 ]
@@ -3165,6 +3166,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2.10" },
     { name = "langgraph-supervisor", specifier = ">=0.0.31" },
     { name = "mem0ai", specifier = ">=2.0.20" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "solari-sandbox", specifier = ">=0.2.0" },
     { name = "tavily", specifier = ">=1.1.0" },
 ]

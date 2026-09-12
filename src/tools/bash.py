@@ -4,7 +4,7 @@ import time
 from langchain_core.tools import tool
 import pathlib
 
-from src.nodes.local import CLONE_ROOT
+from src.nodes.local_setup import CLONE_ROOT
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 ALLOWED_ROOTS = (PROJECT_ROOT, CLONE_ROOT)

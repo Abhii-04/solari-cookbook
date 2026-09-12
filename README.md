@@ -1,6 +1,6 @@
-# ULTRON
+##GitReady
 
-ULTRON is a local CLI agent built with LangGraph. It routes user requests between a
+GitReady is a local CLI agent built with LangGraph. It routes user requests between a
 general assistant workflow and a repository setup workflow, with Solari sandbox
 support for isolated code execution.
 
@@ -41,7 +41,7 @@ uv run python main.py
 You will see a prompt:
 
 ```text
-You:
+gitready / >>
 ```
 
 Type a request and press Enter. Use `exit` or `quit` to stop the agent.
@@ -92,5 +92,4 @@ src/tools/              local bash, skill reading, and Solari tools
 tests/                  unit tests
 examples/               inherited Solari cookbook examples
 ```
-
 

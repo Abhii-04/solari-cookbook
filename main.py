@@ -4,6 +4,7 @@ import select
 import sys
 
 from src.agent import Agent
+from src.cli_ui import GitReadyUI
 
 faulthandler.enable(all_threads=True)
 
@@ -24,9 +25,9 @@ def needs_continuation(text: str) -> bool:
     )
 
 
-def read_user_input() -> str:
+def read_user_input(ui: GitReadyUI) -> str:
     try:
-        lines = [input("You: ")]
+        lines = [ui.prompt()]
     except EOFError:
         return "exit"
 
@@ -38,7 +39,7 @@ def read_user_input() -> str:
 
     while needs_continuation(" ".join(line.strip() for line in lines if line.strip())):
         try:
-            lines.append(input("... "))
+            lines.append(ui.prompt(continuation=True))
         except EOFError:
             break
 
@@ -46,12 +47,15 @@ def read_user_input() -> str:
 
 
 async def main():
-    agent = Agent()
+    ui = GitReadyUI()
+    ui.banner()
+
+    agent = Agent(ui=ui)
     await agent.setup()
 
     try:
         while True:
-            user_input = read_user_input()
+            user_input = read_user_input(ui)
 
             if user_input.lower() in {"exit", "quit"}:
                 break
@@ -62,6 +66,7 @@ async def main():
 
     finally:
         await agent.close()
+        ui.farewell()
 
 
 if __name__ == "__main__":

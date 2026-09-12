@@ -65,8 +65,8 @@ def _setup_log_from_payload(payload: dict[str, Any]) -> str | None:
 
 def _summarize_repo_profile(label: str, profile: dict[str, Any]) -> str:
     parts = [f"{label}_profile:"]
-    manifests = profile.get("manifests")
-    if manifests:
+    manifests = profile.get("manifests")#Manifest=files under key manifests(exp: requirementx.txt,package.json etc)
+    if manifests:   
         parts.append(f"manifests={manifests}")
 
     files = profile.get("files")
