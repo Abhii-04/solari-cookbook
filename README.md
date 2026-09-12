@@ -1,8 +1,14 @@
-##GitReady
+## GitReady
 
-GitReady is a local CLI agent built with LangGraph. It routes user requests between a
-general assistant workflow and a repository setup workflow, with Solari sandbox
-support for isolated code execution.
+GitReady isa LangGraph-based AI agent that converts ambiguous GitHub repository setup requests into an end-to-end
+workflow for repository discovery, environment analysis, dependency installation, testing, and smoke execution.
+
+Why I built this?
+
+- It aims to help non tech people to use opensoource projects and applications 
+- User can test an application on their own set of tests ( they need to update the tests in sandbox_tests folder)
+
+* This is still a MVP and not an end to end product but it can work with smaller repos as of now like flask apps, web applicaitons etc , I havent tested it on OpenCV and other such repos as of 12/09/2026 .
 
 The agent can:
 
